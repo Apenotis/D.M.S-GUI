@@ -14,10 +14,10 @@ from PySide6.QtWidgets import (
     QLabel, QMenu, QMessageBox, QDialog, QLineEdit, QCheckBox, 
     QGroupBox, QSplitter, QAbstractItemView, QScrollArea, QFrame,
     QComboBox, QFileDialog,
-    QInputDialog
+    QInputDialog, QStyledItemDelegate, QStyle
 )
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QAction, QIcon, QColor, QFont
+from PySide6.QtCore import Qt, Signal, QRect, QSize
+from PySide6.QtGui import QAction, QIcon, QColor, QFont, QPainter, QBrush
 
 # ============================================================================
 # CORE-MODULE IMPORTIEREN
@@ -70,6 +70,122 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
 
 # Den globalen Fangzaun im System aktivieren!
 sys.excepthook = global_exception_handler
+
+# ============================================================================
+# CUSTOM DELEGATE: FLAT CARDS MIT AKZENTBALKEN
+# ============================================================================
+class MapItemDelegate(QStyledItemDelegate):
+    """Zeichnet Flat-Cards mit farbigem Akzentbalken und Status-Badges."""
+
+    # Akzentfarben je nach Status / IWAD
+    ACCENT = {
+        "favorite": QColor("#FFD700"),
+        "cleared":  QColor("#2ecc71"),
+        "hexen":    QColor("#9b59b6"),
+        "heretic":  QColor("#f1c40f"),
+        "doom":     QColor("#c0392b"),
+        "none":     QColor("#3a3a3a"),
+    }
+
+    # Badge-Definition: key -> (Hintergrund, Text, Textfarbe)
+    BADGES = [
+        ("f", QColor("#FFD700"), "★", QColor("#111")),
+        ("c", QColor("#2ecc71"), "✓", QColor("#111")),
+        ("m", QColor("#e67e22"), "M", QColor("#fff")),
+    ]
+
+    def paint(self, painter: QPainter, option, index):
+        flags = index.data(Qt.UserRole + 1)
+        is_enabled = bool(index.flags() & Qt.ItemFlag.ItemIsEnabled)
+
+        painter.save()
+        rect = option.rect
+
+        # --- Leere / deaktivierte Zellen: nur Hintergrund ---
+        if not is_enabled or flags is None:
+            painter.fillRect(rect, QColor("#1e1e1e"))
+            painter.restore()
+            return
+
+        # --- Hintergrundfarbe je nach Zustand ---
+        if option.state & QStyle.State_Selected:
+            bg = QColor("#333333")
+        elif option.state & QStyle.State_MouseOver:
+            bg = QColor("#2a2a2a")
+        else:
+            bg = QColor("#222222")
+
+        painter.fillRect(rect, bg)
+
+        # --- Subtile Trennlinie unten ---
+        painter.setPen(QColor("#1a1a1a"))
+        painter.drawLine(rect.left(), rect.bottom(), rect.right(), rect.bottom())
+
+        # --- Akzentbalken (3px links) ---
+        iwad = flags.get("iwad", "")
+        if flags.get("f") == "1":
+            accent = self.ACCENT["favorite"]
+        elif flags.get("c") == "1":
+            accent = self.ACCENT["cleared"]
+        elif "hexen" in iwad:
+            accent = self.ACCENT["hexen"]
+        elif "heretic" in iwad:
+            accent = self.ACCENT["heretic"]
+        else:
+            accent = self.ACCENT["doom"]
+
+        bar = QRect(rect.left() + 6, rect.top() + 5, 3, rect.height() - 10)
+        painter.fillRect(bar, accent)
+
+        # --- Badges rechts berechnen (erst messen, dann Text zeichnen) ---
+        badge_font = QFont("Segoe UI", 7, QFont.Bold)
+        painter.setFont(badge_font)
+        badge_h = 15
+        badge_margin = 4
+        badge_x = rect.right() - 6
+
+        active_badges = [(bg_c, txt, fg_c) for key, bg_c, txt, fg_c in self.BADGES if flags.get(key) == "1"]
+
+        badge_rects = []
+        for bg_c, txt, fg_c in reversed(active_badges):
+            fm = painter.fontMetrics()
+            badge_w = fm.horizontalAdvance(txt) + 10
+            badge_x -= badge_w
+            badge_rects.append((QRect(badge_x, rect.center().y() - badge_h // 2, badge_w, badge_h), bg_c, txt, fg_c))
+            badge_x -= badge_margin
+
+        # --- Name-Text (rechts der Badges aussparen) ---
+        text_right = rect.right() - 6 if not badge_rects else min(r.left() for r, *_ in badge_rects) - 6
+        text_rect = QRect(rect.left() + 16, rect.top(), text_right - rect.left() - 16, rect.height())
+
+        name_font = QFont("Segoe UI", 10)
+        name_font.setBold(flags.get("f") == "1")
+        painter.setFont(name_font)
+
+        if flags.get("f") == "1":
+            painter.setPen(QColor("#FFD700"))
+        elif option.state & QStyle.State_Selected:
+            painter.setPen(QColor("#ffffff"))
+        else:
+            painter.setPen(QColor("#dddddd"))
+
+        name = index.data(Qt.DisplayRole) or ""
+        painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, name)
+
+        # --- Badges zeichnen ---
+        for b_rect, bg_c, txt, fg_c in badge_rects:
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(bg_c)
+            painter.drawRoundedRect(b_rect, 3, 3)
+            painter.setPen(fg_c)
+            painter.setFont(badge_font)
+            painter.drawText(b_rect, Qt.AlignCenter, txt)
+
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        return QSize(200, 40)
+
 
 # ============================================================================
 # DIALOGE (API, ENGINES, DETAILS)
@@ -209,9 +325,9 @@ class ApiBrowserDialog(QDialog):
         self.layout.addLayout(search_layout)
 
         # --- SHORTCUTS (Synchronisiert mit deiner api.py) ---
-        shortcut_group = QGroupBox("Top Megawads / Levels")
         shortcut_layout = QHBoxLayout()
-        shortcut_layout.setContentsMargins(5, 5, 5, 5)
+        shortcut_layout.setContentsMargins(5, 3, 5, 3)
+        shortcut_layout.setSpacing(5)
         
         # WICHTIG: Die zweiten Werte müssen exakt so heißen wie in deiner api.py!
         self.shortcuts = [
@@ -226,9 +342,7 @@ class ApiBrowserDialog(QDialog):
             btn.clicked.connect(lambda checked=False, c=cat: self.load_top(c))
             shortcut_layout.addWidget(btn)
         
-        shortcut_group.setLayout(shortcut_layout)
-        shortcut_group.setStyleSheet("QGroupBox { margin: 0px; padding: 0px; }")
-        self.layout.addWidget(shortcut_group)
+        self.layout.addLayout(shortcut_layout)
 
         # --- TABELLE ---
         self.table = QTableWidget(0, 4)
@@ -540,7 +654,7 @@ class DoomManagerGUI(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"Doom Management System (D.M.S.) v{cfg.APP_VERSION}")
-        self.resize(1200, 800)
+        self.resize(1450, 900)
         
         self.all_maps_data = []
         self.signal_refresh.connect(self.refresh_data)
@@ -567,8 +681,8 @@ class DoomManagerGUI(QMainWindow):
         
         self.btn_api = QPushButton("🌐 Doomworld")
         self.btn_eng = QPushButton("⚙️ Engine Manager")
-        self.btn_install = QPushButton("📥 Install Custom Maps")
-        self.btn_manual_add = QPushButton("➕ Karte manuell")
+        self.btn_install = QPushButton("📥 Install Maps")
+        self.btn_manual_add = QPushButton("➕ Custom Map")
         self.btn_db_viewer = QPushButton("🗄 DB Viewer")
         self.btn_tracker_toggle = QPushButton("")
 
@@ -596,8 +710,8 @@ class DoomManagerGUI(QMainWindow):
         layout.addWidget(splitter)
 
         # 1. TABELLE (Links im Splitter)
-        self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["", "", ""])
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["", "", "", "", ""])
         self.table.horizontalHeader().setVisible(False)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.verticalHeader().setVisible(False)
@@ -605,51 +719,28 @@ class DoomManagerGUI(QMainWindow):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectItems) 
         
-        # --- NEU: 3D-BUTTON STYLING ---
-        self.table.setShowGrid(False) # Versteckt die klassischen Excel-Linien
-        self.table.verticalHeader().setDefaultSectionSize(42) # Gibt den Buttons genug Höhe
-        
+        # --- FLAT-CARD STYLING (Delegate übernimmt das Rendering) ---
+        self.table.setShowGrid(False)
+        self.table.verticalHeader().setDefaultSectionSize(40)
+        self.table.setMouseTracking(True)
+        self.table.viewport().setMouseTracking(True)
+
         self.table.setStyleSheet("""
             QTableWidget {
                 background-color: #1e1e1e;
                 border: none;
-                padding: 5px;
             }
-            
-            QTableWidget::item:disabled {
+            QTableWidget::item {
+                background-color: transparent;
+                border: none;
+                padding: 0px;
+            }
+            QTableWidget::item:selected {
                 background-color: transparent;
                 border: none;
             }
-
-            QTableWidget::item {
-                background-color: #2b2b2b;
-                border: 1px solid #3a3a3a;
-                border-bottom: 4px solid #111111;
-                border-radius: 6px;
-                margin: 3px 6px;
-                padding: 8px 15px 4px 15px;
-                
-                /* --- HIER IST DIE MAGIE FÜR DEN TEXT --- */
-                color: #ffffff;
-                font-family: 'Segoe UI', Arial, sans-serif;
-                font-size: 14px;
-                font-weight: bold;
-            }
-            
-            QTableWidget::item:hover {
-                background-color: #353535;
-                border: 1px solid #4a4a4a;
-                border-bottom: 4px solid #000000;
-            }
-            
-            QTableWidget::item:selected {
-                background-color: #4a4a4a;
-                border: 1px solid #666666;
-                border-bottom: 2px solid #111111;
-                margin-top: 5px;
-                color: white;
-            }
         """)
+        self.table.setItemDelegate(MapItemDelegate(self.table))
         # ------------------------------
 
         # Signale für die Tabelle
@@ -661,23 +752,27 @@ class DoomManagerGUI(QMainWindow):
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(0)
 
-        lbl_doom_header = QLabel("Doom Maps")
-        lbl_doom_header.setAlignment(Qt.AlignCenter)
+        lbl_doom_header = QLabel("  ▌  Doom Maps")
+        lbl_doom_header.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         lbl_doom_header.setStyleSheet(
-            "color: #ecf0f1; font-weight: bold; font-size: 14px;"
-            " background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3a3a3a, stop:1 #2c3e50);"
-            " padding: 10px 0; border: 1px solid #1a1a1a;"
+            "color: #dddddd; font-family: 'Segoe UI', Arial, sans-serif;"
+            " font-size: 12px; font-weight: bold; letter-spacing: 1px;"
+            " background-color: #1e1e1e;"
+            " padding: 8px 12px;"
+            " border-bottom: 2px solid #c0392b;"
         )
 
-        lbl_heretic_header = QLabel("Heretic / Hexen / Extras")
-        lbl_heretic_header.setAlignment(Qt.AlignCenter)
+        lbl_heretic_header = QLabel("  ▌  Heretic / Hexen / Extras")
+        lbl_heretic_header.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         lbl_heretic_header.setStyleSheet(
-            "color: #ecf0f1; font-weight: bold; font-size: 14px;"
-            " background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3a3a3a, stop:1 #2c3e50);"
-            " padding: 10px 0; border: 1px solid #1a1a1a;"
+            "color: #dddddd; font-family: 'Segoe UI', Arial, sans-serif;"
+            " font-size: 12px; font-weight: bold; letter-spacing: 1px;"
+            " background-color: #1e1e1e;"
+            " padding: 8px 12px;"
+            " border-bottom: 2px solid #f1c40f;"
         )
 
-        header_layout.addWidget(lbl_doom_header, 2)
+        header_layout.addWidget(lbl_doom_header, 4)
         header_layout.addWidget(lbl_heretic_header, 1)
 
         left_panel = QWidget()
@@ -754,8 +849,10 @@ class DoomManagerGUI(QMainWindow):
         splitter.addWidget(right_panel)
         
         # --- DER BREITEN-FIX ---
-        # Größenverhältnis anpassen: Wir geben der Tabelle links 950px und dem Panel rechts nur noch 250px!
-        splitter.setSizes([950, 250])
+        # Startet das rechte Panel auf der minimalen Breite, die das Layout zulässt.
+        min_right_width = right_panel.minimumSizeHint().width()
+        left_width = max(200, self.width() - min_right_width)
+        splitter.setSizes([left_width, min_right_width])
 
         self.statusBar().showMessage("Bereit.")
 
@@ -1082,34 +1179,12 @@ class DoomManagerGUI(QMainWindow):
                 item.setFlags(Qt.ItemFlag.NoItemFlags) 
                 return item
 
-            # ==========================================
-            # AB HIER GEHT DEIN DESIGN-CODE WEITER
-            # ==========================================
+            # Name als reinen Text (Delegate übernimmt Badges + Farben)
             display = name if name and name != "-" else mid
-            
-            symbols = []
-            if f_flag == "1": symbols.append("⭐")
-            if c_flag == "1": symbols.append("✅")
-            if m_flag == "1": symbols.append("🅼")
-            
-            if symbols:
-                display = f"{display}   {' '.join(symbols)}"
 
             item = QTableWidgetItem(display)
             item.setData(Qt.UserRole, mid)
-            item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
-
-            if f_flag == "1":
-                item.setForeground(QColor("#FFD700")) 
-                font = item.font()
-                font.setBold(True)
-                item.setFont(font)
-            elif "hexen" in iwad:
-                item.setForeground(QColor(155, 89, 182))
-            elif "heretic" in iwad:
-                item.setForeground(QColor(241, 196, 15))
-            elif c_flag == "1":
-                item.setForeground(QColor(46, 204, 113))
+            item.setData(Qt.UserRole + 1, {"c": c_flag, "f": f_flag, "m": m_flag, "iwad": iwad})
 
             return item
 
@@ -1122,10 +1197,10 @@ class DoomManagerGUI(QMainWindow):
             all_m = db.get_all_maps()
             
             # 2. Karten verteilen & sortieren
-            blocks = {1: [], 2: [], 3: []}
+            blocks = {1: [], 2: [], 3: [], 4: [], 5: []}
             doom_maps = []
             
-            # Listen für die Extras (Spalte 3)
+            # Listen für die Extras (Spalte 5)
             heretic_maps = []
             hexen_maps = []
             strife_maps = []
@@ -1136,7 +1211,7 @@ class DoomManagerGUI(QMainWindow):
                 iwad = str(m.get("IWAD", "")).lower() if isinstance(m, dict) else str(m[4]).lower()
                 kat = str(m.get("Kategorie", "PWAD")).upper() if isinstance(m, dict) else str(m[8]).upper()
 
-                # Kategorie EXTRA immer in Spalte 3 halten
+                # Kategorie EXTRA immer in Spalte 5 halten
                 if kat == "EXTRA":
                     if "heretic" in iwad:
                         heretic_maps.append(m)
@@ -1148,7 +1223,7 @@ class DoomManagerGUI(QMainWindow):
                         extra_misc_maps.append(m)
                     continue
                 
-                # Fein-Sortierung für Spalte 3 (Extras)
+                # Fein-Sortierung für Spalte 5 (Extras)
                 if "heretic" in iwad:
                     heretic_maps.append(m)
                 elif "hexen" in iwad:
@@ -1159,35 +1234,37 @@ class DoomManagerGUI(QMainWindow):
                     # Alles andere (Doom 1, Doom 2, Plutonia, TNT) ist DOOM
                     doom_maps.append(m)
 
-            # --- SPALTE 3 ZUSAMMENBAUEN (MIT UNSICHTBAREN LÜCKEN) ---
+            # --- SPALTE 5 ZUSAMMENBAUEN (MIT UNSICHTBAREN LÜCKEN) ---
             if heretic_maps:
-                blocks[3].extend(heretic_maps)
+                blocks[5].extend(heretic_maps)
                 
             if hexen_maps:
                 # Fügt eine leere Liste [] als Platzhalter ein, falls schon Heretic-Karten da sind
-                if blocks[3]: 
-                    blocks[3].append([]) 
-                blocks[3].extend(hexen_maps)
+                if blocks[5]: 
+                    blocks[5].append([]) 
+                blocks[5].extend(hexen_maps)
                 
             if strife_maps:
                 # Fügt noch eine Lücke ein, falls es Strife gibt und vorher schon Karten da sind
-                if blocks[3]:
-                    blocks[3].append([])
-                blocks[3].extend(strife_maps)
+                if blocks[5]:
+                    blocks[5].append([])
+                blocks[5].extend(strife_maps)
 
             if extra_misc_maps:
-                if blocks[3]:
-                    blocks[3].append([])
-                blocks[3].extend(extra_misc_maps)
+                if blocks[5]:
+                    blocks[5].append([])
+                blocks[5].extend(extra_misc_maps)
             # --------------------------------------------------------
 
-            # Doom-Karten fair auf Spalte 1 und 2 aufteilen
-            half = (len(doom_maps) + 1) // 2
-            blocks[1] = doom_maps[:half]
-            blocks[2] = doom_maps[half:]
+            # Doom-Karten fair auf Spalte 1, 2, 3 und 4 aufteilen
+            per_col = (len(doom_maps) + 3) // 4
+            blocks[1] = doom_maps[:per_col]
+            blocks[2] = doom_maps[per_col:per_col * 2]
+            blocks[3] = doom_maps[per_col * 2:per_col * 3]
+            blocks[4] = doom_maps[per_col * 3:]
 
             # 3. Maximale Zeilen berechnen
-            max_rows = max(len(blocks[1]), len(blocks[2]), len(blocks[3]))
+            max_rows = max(len(blocks[1]), len(blocks[2]), len(blocks[3]), len(blocks[4]), len(blocks[5]))
             self.table.setRowCount(max_rows)
 
             # 4. Tabelle füllen
@@ -1195,13 +1272,19 @@ class DoomManagerGUI(QMainWindow):
                 item1 = self.create_item(blocks[1][i]) if i < len(blocks[1]) else self.create_item([])
                 item2 = self.create_item(blocks[2][i]) if i < len(blocks[2]) else self.create_item([])
                 item3 = self.create_item(blocks[3][i]) if i < len(blocks[3]) else self.create_item([])
+                item4 = self.create_item(blocks[4][i]) if i < len(blocks[4]) else self.create_item([])
+                item5 = self.create_item(blocks[5][i]) if i < len(blocks[5]) else self.create_item([])
                 
                 self.table.setItem(i, 0, item1)
                 self.table.setItem(i, 1, item2)
                 self.table.setItem(i, 2, item3)
+                self.table.setItem(i, 3, item4)
+                self.table.setItem(i, 4, item5)
 
         except Exception as e:
             print(f"Fehler beim Laden der Tabelle: {e}")
+
+        self.update_stats()
 
     def update_stats(self):
         """Dashboard-Update (0/1 System)."""
@@ -1321,13 +1404,46 @@ class DoomManagerGUI(QMainWindow):
         self.statusBar().showMessage("Scanne 'Install'-Ordner nach neuen Karten...")
         
         # Aufruf der neuen Funktion ohne Browser-Fenster!
-        count = installer.install_from_folder(callback=lambda m: self.statusBar().showMessage(m))
+        count = installer.install_from_folder(
+            callback=lambda m: self.statusBar().showMessage(m),
+            resolve_game=self.prompt_install_game_profile,
+        )
         
         if count > 0:
             self.refresh_data()
             QMessageBox.information(self, "Auto-Installer", f"{count} Karte(n) erfolgreich aus dem Install-Ordner importiert!")
         else:
             self.statusBar().showMessage("Keine neuen Dateien im 'Install'-Ordner gefunden.")
+
+    def prompt_install_game_profile(self, file_path):
+        """Fallback-Dialog: Fragt nach dem Hauptspiel, wenn keine TXT-IWAD-Info gefunden wurde."""
+        fname = os.path.basename(str(file_path))
+        options = [
+            "DOOM (doom.wad)",
+            "DOOM II (doom2.wad)",
+            "HERETIC (heretic.wad)",
+            "HEXEN (hexen.wad)",
+        ]
+
+        selected, ok = QInputDialog.getItem(
+            self,
+            "Hauptspiel wählen",
+            f"Keine TXT-IWAD-Info gefunden für:\n{fname}\n\nFür welches Hauptspiel ist diese Erweiterung?",
+            options,
+            1,
+            False,
+        )
+
+        if not ok:
+            return None
+
+        mapping = {
+            "DOOM (doom.wad)": "doom",
+            "DOOM II (doom2.wad)": "doom2",
+            "HERETIC (heretic.wad)": "heretic",
+            "HEXEN (hexen.wad)": "hexen",
+        }
+        return mapping.get(selected)
 
     def add_map_manually(self):
         """Fügt eine Karte manuell in die Datenbank ein."""
@@ -1458,6 +1574,7 @@ class DoomManagerGUI(QMainWindow):
         act_clear = menu.addAction("✔ Map Clear")
         act_mod   = menu.addAction("🅼 Skip Mods")
         act_fav   = menu.addAction("⭐ Favorit") 
+        act_rename = menu.addAction("✏ Karte umbenennen")
         
         menu.addSeparator()
         act_args  = menu.addAction("🛠 Parameter bearbeiten")
@@ -1479,6 +1596,9 @@ class DoomManagerGUI(QMainWindow):
             db.toggle_favorite(mid)
             self.statusBar().showMessage(f"Favoriten-Status für {mid} geändert.")
             self.refresh_data()
+
+        elif action == act_rename:
+            self.rename_map(mid)
             
         elif action == act_args:
             if hasattr(self, 'edit_map_parameters'):
@@ -1497,6 +1617,38 @@ class DoomManagerGUI(QMainWindow):
                 self.refresh_data()
             else:
                 QMessageBox.warning(self, "Fehler", "Map konnte nicht gelöscht werden (Basis-Spiel?).")
+
+    def rename_map(self, map_id):
+        """Benennt den Karten-Namen in der Datenbank um."""
+        map_data = db.get_map_by_id(map_id)
+        if not map_data:
+            QMessageBox.warning(self, "Fehler", "Karte wurde nicht gefunden.")
+            return
+
+        current_name = str(map_data.get("Name", "")).strip() or str(map_id)
+        new_name, ok = QInputDialog.getText(
+            self,
+            "Karte umbenennen",
+            f"Neuer Name für {map_id}:",
+            text=current_name,
+        )
+
+        if not ok:
+            return
+
+        final_name = str(new_name).strip()
+        if not final_name:
+            QMessageBox.warning(self, "Ungültiger Name", "Der Name darf nicht leer sein.")
+            return
+
+        if final_name == current_name:
+            return
+
+        if db.update_map_name(map_id, final_name):
+            self.statusBar().showMessage(f"Karte {map_id} umbenannt in '{final_name}'.", 5000)
+            self.refresh_data()
+        else:
+            QMessageBox.warning(self, "Fehler", "Name konnte nicht gespeichert werden.")
 
     def open_api(self):
         """Öffnet den Doomworld-Browser und refresh't nach erfolgreichem Download."""

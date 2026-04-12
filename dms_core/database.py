@@ -203,6 +203,52 @@ def toggle_favorite(map_id):
     finally:
         conn.close()
 
+
+def update_map_name(map_id, new_name):
+    """Aktualisiert den Namen einer Map."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        clean_id = str(map_id).strip().upper()
+        clean_name = str(new_name).strip()
+        if not clean_id or not clean_name:
+            return False
+
+        cursor.execute("UPDATE maps SET Name = ? WHERE ID = ?", (clean_name, clean_id))
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception as e:
+        print(f"❌ Fehler beim Umbenennen: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def update_map_args(map_id, new_args):
+    """Aktualisiert die Startparameter (ARGS) einer Map."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        clean_id = str(map_id).strip().upper()
+        clean_args = str(new_args).strip() if new_args is not None else "0"
+        if not clean_id:
+            return False
+
+        # Leere Eingabe als '0' speichern (entspricht: keine Zusatzparameter)
+        if clean_args == "":
+            clean_args = "0"
+
+        cursor.execute("UPDATE maps SET ARGS = ? WHERE ID = ?", (clean_args, clean_id))
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception as e:
+        print(f"❌ Fehler beim ARGS-Update: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
 # ============================================================================
 # SPIELZEIT & STATISTIK
 # ============================================================================
