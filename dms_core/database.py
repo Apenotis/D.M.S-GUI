@@ -97,7 +97,8 @@ def get_all_maps():
     """Liest alle Maps aus der SQLite-Datenbank."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM maps ORDER BY ID")
+    # Einfuegereihenfolge beibehalten: neue Karten erscheinen am Listenende.
+    cursor.execute("SELECT * FROM maps ORDER BY ROWID ASC")
     rows = cursor.fetchall()
     conn.close()
     

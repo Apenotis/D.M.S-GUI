@@ -185,12 +185,17 @@ class SetupWizard(QDialog):
             
             successful_txt = ", ".join([e.upper() for e in successful]) if successful else "Keine"
             failed_txt = ", ".join([e.upper() for e in failed]) if failed else "Keine"
+
+            if successful:
+                # Neu installierte Engine direkt als Standard setzen.
+                cfg.update_config_value("SETTINGS", "current_engine", successful[0])
+                cfg.load_config()
             
             if successful:
                 QMessageBox.information(
                     dialog,
                     "Fertig",
-                    f"Engine-Installation abgeschlossen!\n\nErfolgreich: {successful_txt}\n\nFehlgeschlagen: {failed_txt}",
+                    f"Engine-Installation abgeschlossen!\n\nErfolgreich: {successful_txt}\n\nFehlgeschlagen: {failed_txt}\n\nAktive Engine: {successful[0].upper()}",
                 )
             else:
                 QMessageBox.warning(dialog, "Fehler", "Alle Installationen sind fehlgeschlagen!")

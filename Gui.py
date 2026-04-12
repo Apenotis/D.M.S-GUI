@@ -6,6 +6,8 @@ import random
 import logging
 import traceback
 import configparser
+import shutil
+from datetime import datetime, timedelta
 
 # Nur die Widgets, die wirklich im Code vorkommen
 from PySide6.QtWidgets import (
@@ -13,10 +15,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QPushButton, QWidget, QHeaderView, 
     QLabel, QMenu, QMessageBox, QDialog, QLineEdit, QCheckBox, 
     QGroupBox, QSplitter, QAbstractItemView, QScrollArea, QFrame,
-    QComboBox, QFileDialog,
+    QComboBox, QFileDialog, QSizePolicy,
     QInputDialog, QStyledItemDelegate, QStyle
 )
-from PySide6.QtCore import Qt, Signal, QRect, QSize
+from PySide6.QtCore import Qt, Signal, QRect, QSize, QTimer
 from PySide6.QtGui import QAction, QIcon, QColor, QFont, QPainter, QBrush
 
 # ============================================================================
@@ -89,6 +91,7 @@ class MapItemDelegate(QStyledItemDelegate):
 
     # Badge-Definition: key -> (Hintergrund, Text, Textfarbe)
     BADGES = [
+        ("n", QColor("#3498db"), "NEW", QColor("#fff")),
         ("f", QColor("#FFD700"), "★", QColor("#111")),
         ("c", QColor("#2ecc71"), "✓", QColor("#111")),
         ("m", QColor("#e67e22"), "M", QColor("#fff")),
@@ -478,6 +481,9 @@ class ApiBrowserDialog(QDialog):
         
         if success:
             QMessageBox.information(self, "Erfolg", f"Download abgeschlossen!\nID: {msg}")
+            parent = self.parent()
+            if parent and hasattr(parent, "set_pending_focus_map"):
+                parent.set_pending_focus_map(msg)
             self.main_refresh_signal.emit() # Refresht die Haupt-GUI Tabelle
             self.populate_table() # Setzt den Status auf INSTALLED
         else:
@@ -644,12 +650,89 @@ class DatabaseViewerDialog(QDialog):
             QMessageBox.critical(self, "Export-Fehler", str(e))
 
 
+class InstallToast(QFrame):
+    """Kleines Popup unten rechts mit Aktion zum Anspringen einer Map."""
+    jump_requested = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setStyleSheet(
+            "QFrame { background-color: #1f2a33; border: 1px solid #3a4b57; border-radius: 8px; }"
+            "QLabel { color: #e5edf3; }"
+            "QPushButton { background-color: #2980b9; color: white; border: none; border-radius: 5px; padding: 5px 10px; }"
+            "QPushButton:hover { background-color: #3498db; }"
+        )
+
+        self.current_map_id = None
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
+
+        self.lbl_title = QLabel("Map installiert")
+        self.lbl_title.setStyleSheet("font-weight: bold;")
+        self.lbl_msg = QLabel("-")
+        self.lbl_msg.setWordWrap(True)
+
+        btn_row = QHBoxLayout()
+        self.btn_jump = QPushButton("Anspringen")
+        self.btn_close = QPushButton("X")
+        self.btn_close.setFixedWidth(28)
+        self.btn_close.setStyleSheet(
+            "QPushButton { background-color: #3a4b57; color: #d7e1e8; border: none; border-radius: 5px; padding: 5px; }"
+            "QPushButton:hover { background-color: #546a79; }"
+        )
+        self.btn_jump.clicked.connect(self._on_jump)
+        self.btn_close.clicked.connect(self.hide)
+        btn_row.addWidget(self.btn_jump)
+        btn_row.addStretch()
+        btn_row.addWidget(self.btn_close)
+
+        layout.addWidget(self.lbl_title)
+        layout.addWidget(self.lbl_msg)
+        layout.addLayout(btn_row)
+
+        self.hide_timer = QTimer(self)
+        self.hide_timer.setSingleShot(True)
+        self.hide_timer.timeout.connect(self.hide)
+
+    def show_for_map(self, map_id):
+        self.current_map_id = str(map_id or "").strip().upper()
+        if not self.current_map_id:
+            return
+
+        self.lbl_msg.setText(f"Map installiert: {self.current_map_id}")
+        self.adjustSize()
+        self._position_bottom_right()
+        self.show()
+        self.raise_()
+        self.hide_timer.start(9000)
+
+    def _position_bottom_right(self):
+        parent = self.parentWidget()
+        if not parent:
+            return
+
+        global_pos = parent.mapToGlobal(parent.rect().bottomRight())
+        x = global_pos.x() - self.width() - 16
+        y = global_pos.y() - self.height() - 40
+        self.move(max(10, x), max(10, y))
+
+    def _on_jump(self):
+        if self.current_map_id:
+            self.jump_requested.emit(self.current_map_id)
+        self.hide()
+
+
 # ============================================================================
 # HAUPT-GUI (D.M.S. SCHALTZENTRALE)
 # ============================================================================
 
 class DoomManagerGUI(QMainWindow):
     signal_refresh = Signal()
+    NEW_WINDOW_HOURS = 72
+    CHANGELOG_TAG = "3.1-ui-2026-04"
 
     def __init__(self):
         super().__init__()
@@ -657,9 +740,18 @@ class DoomManagerGUI(QMainWindow):
         self.resize(1450, 900)
         
         self.all_maps_data = []
+        self.pending_focus_map_id = None
+        self.sort_mode = cfg.config.get("SETTINGS", "map_sort_mode", fallback="insert")
+        self.quick_filter = cfg.config.get("SETTINGS", "map_quick_filter", fallback="ALLE").upper()
+        self.recent_installs = self._load_recent_installs()
+        self.preview_current_map_id = None
+        self.preview_image_cache = {}
+        self.install_toast = None
         self.signal_refresh.connect(self.refresh_data)
 
         self.setup_ui()
+        self.install_toast = InstallToast(self)
+        self.install_toast.jump_requested.connect(self.jump_to_map)
         self.refresh_data()
         
         # Einrichtungsassistent beim ersten Start
@@ -670,6 +762,171 @@ class DoomManagerGUI(QMainWindow):
         
         # Check für Updates beim Start
         self.check_updates()
+        self.maybe_show_changelog()
+
+    def set_pending_focus_map(self, map_id, show_toast=True):
+        """Merkt sich eine Map-ID, die nach dem nächsten Refresh automatisch fokussiert wird."""
+        if map_id:
+            clean_id = str(map_id).strip().upper()
+            self.pending_focus_map_id = clean_id
+            self.mark_maps_as_new([clean_id])
+            if show_toast:
+                self.show_install_toast(clean_id)
+
+    def show_install_toast(self, map_id):
+        """Zeigt ein kleines Install-Popup unten rechts mit Anspringen-Button."""
+        if self.install_toast:
+            self.install_toast.show_for_map(map_id)
+
+    def jump_to_map(self, map_id):
+        """Springt direkt zu einer Karten-ID in der aktuellen Tabelle."""
+        clean_id = str(map_id or "").strip().upper()
+        if not clean_id:
+            return
+
+        if not self._focus_map_in_table(clean_id):
+            self.pending_focus_map_id = clean_id
+            self.refresh_data()
+
+    def maybe_show_changelog(self):
+        """Zeigt Changelog einmal pro Tag-Version nach App-Start."""
+        seen_tag = cfg.config.get("SETTINGS", "last_seen_changelog", fallback="").strip()
+        if seen_tag != self.CHANGELOG_TAG:
+            self.show_changelog(force=False)
+            cfg.update_config_value("SETTINGS", "last_seen_changelog", self.CHANGELOG_TAG)
+
+    def _build_changelog_html(self):
+        """Liefert den kompakten What's New Text."""
+        return (
+            "<b>Mini Changelog</b><br><br>"
+            "<b>UI & Navigation</b><br>"
+            "- Live-Suche + Quick-Filter-Chips<br>"
+            "- Sortiermenue mit Speicherung<br>"
+            "- Neue Karten bekommen NEW-Badge<br><br>"
+            "<b>Install-Flow</b><br>"
+            "- Popup unten rechts: 'Map installiert'<br>"
+            "- Button 'Anspringen' springt direkt zur Karte<br><br>"
+            "<b>Komfort</b><br>"
+            "- Zufallskarte nutzt sichtbare/gefilterte Karten<br>"
+            "- Preview-Panel mit Map-Metadaten + Bild setzen<br>"
+            "- Dashboard erweitert (Clear %, FAV, NEW, VIEW)"
+        )
+
+    def show_changelog(self, force=False):
+        """Zeigt den Mini-Changelog Dialog."""
+        msg = QMessageBox(self)
+        msg.setWindowTitle("What's New")
+        msg.setIcon(QMessageBox.Information)
+        msg.setTextFormat(Qt.TextFormat.RichText)
+        msg.setText(self._build_changelog_html())
+        msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+        if not force:
+            msg.setInformativeText("Dieser Hinweis wird einmal pro Versions-Update gezeigt.")
+        msg.exec()
+
+    def _load_recent_installs(self):
+        """Liest NEW-Markierungen aus der Konfiguration und entfernt alte Einträge."""
+        raw = cfg.config.get("SETTINGS", "recent_installs", fallback="").strip()
+        installs = {}
+
+        if raw:
+            for chunk in raw.split(";"):
+                if "|" not in chunk:
+                    continue
+                map_id, iso_time = chunk.split("|", 1)
+                map_id = str(map_id).strip().upper()
+                iso_time = str(iso_time).strip()
+                if map_id and iso_time:
+                    installs[map_id] = iso_time
+
+        self.recent_installs = installs
+        self._prune_recent_installs()
+        return self.recent_installs
+
+    def _save_recent_installs(self):
+        """Speichert NEW-Markierungen kompakt als SETTINGS.recent_installs."""
+        if not self.recent_installs:
+            cfg.update_config_value("SETTINGS", "recent_installs", "")
+            return
+
+        payload = ";".join(f"{mid}|{iso}" for mid, iso in sorted(self.recent_installs.items()))
+        cfg.update_config_value("SETTINGS", "recent_installs", payload)
+
+    def _prune_recent_installs(self):
+        """Entfernt NEW-Markierungen, die älter als das Zeitfenster sind."""
+        cutoff = datetime.now() - timedelta(hours=self.NEW_WINDOW_HOURS)
+        keep = {}
+
+        for mid, iso_time in self.recent_installs.items():
+            try:
+                dt = datetime.fromisoformat(iso_time)
+                if dt >= cutoff:
+                    keep[mid] = iso_time
+            except Exception:
+                continue
+
+        self.recent_installs = keep
+
+    def mark_maps_as_new(self, map_ids):
+        """Markiert eine oder mehrere Karten als NEW und persistiert das Ergebnis."""
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        changed = False
+
+        for map_id in map_ids:
+            mid = str(map_id or "").strip().upper()
+            if not mid:
+                continue
+            self.recent_installs[mid] = now_iso
+            changed = True
+
+        if changed:
+            self._prune_recent_installs()
+            self._save_recent_installs()
+
+    def _is_recent_install(self, map_id):
+        """Prüft, ob eine Karte aktuell als NEW markiert ist."""
+        mid = str(map_id or "").strip().upper()
+        if not mid:
+            return False
+
+        iso_time = self.recent_installs.get(mid)
+        if not iso_time:
+            return False
+
+        try:
+            dt = datetime.fromisoformat(iso_time)
+        except Exception:
+            return False
+
+        return dt >= (datetime.now() - timedelta(hours=self.NEW_WINDOW_HOURS))
+
+    def _sort_map_id_key(self, map_id):
+        """Sortierschlüssel für IDs wie DOOM123 oder HEXEN7."""
+        mid = str(map_id or "").strip().upper()
+        prefix = "".join(ch for ch in mid if ch.isalpha())
+        suffix = "".join(ch for ch in mid if ch.isdigit())
+        number = int(suffix) if suffix.isdigit() else -1
+        return (prefix, number, mid)
+
+    def _focus_map_in_table(self, map_id):
+        """Sucht eine Map in allen Spalten, markiert sie und scrollt sie sichtbar."""
+        target = str(map_id or "").strip().upper()
+        if not target:
+            return False
+
+        for row in range(self.table.rowCount()):
+            for col in range(self.table.columnCount()):
+                item = self.table.item(row, col)
+                if not item:
+                    continue
+
+                item_id = str(item.data(Qt.UserRole) or "").strip().upper()
+                if item_id == target:
+                    self.table.setCurrentItem(item)
+                    self.table.scrollToItem(item, QAbstractItemView.ScrollHint.PositionAtCenter)
+                    self.table.setFocus()
+                    return True
+        return False
 
     def setup_ui(self):
         main_widget = QWidget()
@@ -684,6 +941,7 @@ class DoomManagerGUI(QMainWindow):
         self.btn_install = QPushButton("📥 Install Maps")
         self.btn_manual_add = QPushButton("➕ Custom Map")
         self.btn_db_viewer = QPushButton("🗄 DB Viewer")
+        self.btn_changelog = QPushButton("📝 What's New")
         self.btn_tracker_toggle = QPushButton("")
 
         # Signale verknüpfen
@@ -692,12 +950,14 @@ class DoomManagerGUI(QMainWindow):
         self.btn_install.clicked.connect(self.run_installer)
         self.btn_manual_add.clicked.connect(self.add_map_manually)
         self.btn_db_viewer.clicked.connect(self.open_db_viewer)
+        self.btn_changelog.clicked.connect(lambda: self.show_changelog(force=True))
         self.btn_tracker_toggle.clicked.connect(self.toggle_tracker)
 
         self.update_tracker_button_text()
         
         top_layout.addStretch() # Schiebt alles nach rechts
         top_layout.addWidget(self.btn_tracker_toggle)
+        top_layout.addWidget(self.btn_changelog)
         top_layout.addWidget(self.btn_db_viewer)
         top_layout.addWidget(self.btn_manual_add)
         top_layout.addWidget(self.btn_install)
@@ -746,6 +1006,7 @@ class DoomManagerGUI(QMainWindow):
         # Signale für die Tabelle
         self.table.customContextMenuRequested.connect(self.show_context_menu)
         self.table.itemDoubleClicked.connect(self.run_selected_map)
+        self.table.itemSelectionChanged.connect(self.update_map_preview)
 
         header_container = QWidget()
         header_layout = QHBoxLayout(header_container)
@@ -780,6 +1041,93 @@ class DoomManagerGUI(QMainWindow):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(0)
         left_layout.addWidget(header_container)
+
+        # Live-Suche fuer grosse Kartenlisten.
+        self.map_search_input = QLineEdit()
+        self.map_search_input.setPlaceholderText("Karte suchen (Name, ID, IWAD)...")
+        self.map_search_input.setClearButtonEnabled(True)
+        self.map_search_input.setStyleSheet(
+            "QLineEdit {"
+            " background-color: #232323;"
+            " color: #dddddd;"
+            " border: 1px solid #444;"
+            " border-radius: 4px;"
+            " padding: 6px 8px;"
+            " margin: 6px;"
+            "}"
+            "QLineEdit:focus {"
+            " border: 1px solid #c0392b;"
+            "}"
+        )
+        self.map_search_input.textChanged.connect(self.refresh_data)
+        left_layout.addWidget(self.map_search_input)
+
+        controls_widget = QWidget()
+        controls_layout = QVBoxLayout(controls_widget)
+        controls_layout.setContentsMargins(6, 0, 6, 6)
+        controls_layout.setSpacing(6)
+
+        lbl_sort = QLabel("Sortierung:")
+        lbl_sort.setStyleSheet("color: #bcbcbc; font-weight: bold;")
+        self.cmb_sort = QComboBox()
+        self.cmb_sort.addItem("Insertion Order", "insert")
+        self.cmb_sort.addItem("Neueste zuerst", "newest")
+        self.cmb_sort.addItem("Name A-Z", "name_asc")
+        self.cmb_sort.addItem("Favoriten zuerst", "fav_first")
+        self.cmb_sort.addItem("Zuletzt gespielt", "last_played")
+        self.cmb_sort.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.cmb_sort.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.cmb_sort.setStyleSheet(
+            "QComboBox { background-color: #232323; color: #dddddd; border: 1px solid #444; border-radius: 4px; padding: 4px 8px; }"
+            "QComboBox::drop-down { border: none; }"
+        )
+        sort_idx = self.cmb_sort.findData(self.sort_mode)
+        self.cmb_sort.setCurrentIndex(sort_idx if sort_idx >= 0 else 0)
+        self.cmb_sort.currentIndexChanged.connect(self.on_sort_mode_changed)
+
+        chips_row = QHBoxLayout()
+        chips_row.setSpacing(6)
+        self.quick_filter_buttons = {}
+        chip_defs = [
+            ("ALLE", "Alle"),
+            ("DOOM", "Doom"),
+            ("HERETIC", "Heretic"),
+            ("HEXEN", "Hexen"),
+        ]
+
+        for key, label in chip_defs:
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setMinimumHeight(28)
+            btn.setStyleSheet(
+                "QPushButton { background-color: #2a2a2a; color: #d0d0d0; border: 1px solid #444; border-radius: 12px; padding: 3px 10px; }"
+                "QPushButton:hover { border-color: #666; }"
+                "QPushButton:checked { background-color: #c0392b; color: #fff; border-color: #e74c3c; }"
+            )
+            btn.clicked.connect(lambda checked=False, k=key: self.set_quick_filter(k))
+            chips_row.addWidget(btn)
+            self.quick_filter_buttons[key] = btn
+
+        chips_row.addStretch()
+        controls_layout.addLayout(chips_row)
+
+        info_row = QHBoxLayout()
+        legend = QLabel(
+            "<span style='color:#3498db; font-weight:bold;'>NEW</span> = neu installiert   "
+            "<span style='color:#FFD700; font-weight:bold;'>★</span> = Favorit   "
+            "<span style='color:#2ecc71; font-weight:bold;'>✓</span> = Clear   "
+            "<span style='color:#e67e22; font-weight:bold;'>M</span> = Mods gesperrt"
+        )
+        legend.setStyleSheet("color: #bcbcbc; font-size: 11px; padding-left: 2px;")
+        info_row.addWidget(legend)
+        info_row.addStretch()
+        info_row.addWidget(lbl_sort)
+        info_row.addWidget(self.cmb_sort)
+        controls_layout.addLayout(info_row)
+
+        left_layout.addWidget(controls_widget)
+        self.set_quick_filter(self.quick_filter, persist=False)
+
         left_layout.addWidget(self.table)
 
         splitter.addWidget(left_panel)
@@ -788,6 +1136,46 @@ class DoomManagerGUI(QMainWindow):
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(10, 0, 10, 10) # Etwas Rand für eine sauberere Optik
+
+        # --- Map Preview ---
+        preview_group = QGroupBox("Map Preview")
+        preview_group.setStyleSheet("""
+            QGroupBox { font-weight: bold; border: 1px solid #555; border-radius: 5px; margin-top: 8px; }
+            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #aaa; }
+        """)
+        preview_layout = QVBoxLayout()
+        preview_layout.setContentsMargins(8, 10, 8, 8)
+        preview_layout.setSpacing(4)
+
+        self.preview_title = QLabel("Keine Karte ausgewaehlt")
+        self.preview_title.setStyleSheet("color: #ecf0f1; font-size: 13px; font-weight: bold;")
+        self.preview_tag = QLabel("-")
+        self.preview_tag.setAlignment(Qt.AlignCenter)
+        self.preview_tag.setFixedHeight(20)
+        self.preview_tag.setStyleSheet("background-color: #3a3a3a; color: #dcdcdc; border-radius: 10px; font-size: 11px; padding: 0 8px;")
+        self.preview_meta = QLabel("ID: - | IWAD: - | Kategorie: -")
+        self.preview_meta.setStyleSheet("color: #b8b8b8;")
+        self.preview_play = QLabel("Playtime: 0 min | Last Played: -")
+        self.preview_play.setStyleSheet("color: #9aa0a6;")
+        self.preview_path = QLabel("Pfad: -")
+        self.preview_path.setStyleSheet("color: #8f8f8f;")
+        self.preview_path.setWordWrap(True)
+
+        preview_buttons = QHBoxLayout()
+        self.btn_preview_set_image = QPushButton("🖼 Bild setzen")
+        self.btn_preview_set_image.setMinimumHeight(30)
+        self.btn_preview_set_image.clicked.connect(self.preview_set_image)
+        preview_buttons.addWidget(self.btn_preview_set_image)
+        preview_buttons.addStretch()
+
+        preview_layout.addWidget(self.preview_title)
+        preview_layout.addWidget(self.preview_tag)
+        preview_layout.addWidget(self.preview_meta)
+        preview_layout.addWidget(self.preview_play)
+        preview_layout.addWidget(self.preview_path)
+        preview_layout.addLayout(preview_buttons)
+        preview_group.setLayout(preview_layout)
+        right_layout.addWidget(preview_group)
         
         # --- Mod-Auswahl Box mit Scroll-Area ---
         mod_group = QGroupBox("Verfügbare Mods")
@@ -846,6 +1234,16 @@ class DoomManagerGUI(QMainWindow):
         self.btn_run.clicked.connect(self.run_selected_map)
         right_layout.addWidget(self.btn_run)
 
+        self.btn_exit = QPushButton("✖ BEENDEN")
+        self.btn_exit.setMinimumHeight(40)
+        self.btn_exit.setStyleSheet("""
+            QPushButton { background-color: #c0392b; color: white; font-weight: bold; font-size: 12px; border-radius: 4px; }
+            QPushButton:hover { background-color: #e74c3c; }
+            QPushButton:pressed { background-color: #a93226; }
+        """)
+        self.btn_exit.clicked.connect(self.close)
+        right_layout.addWidget(self.btn_exit)
+
         splitter.addWidget(right_panel)
         
         # --- DER BREITEN-FIX ---
@@ -871,8 +1269,14 @@ class DoomManagerGUI(QMainWindow):
         self.stat_count = QLabel("📂 KARTEN: -")
         self.stat_cleared = QLabel("✅ CLEAR: -")
         self.stat_cleared.setStyleSheet("color: #2ecc71;") 
+        self.stat_favorites = QLabel("⭐ FAV: -")
+        self.stat_favorites.setStyleSheet("color: #f1c40f;")
+        self.stat_new = QLabel("🆕 NEW: -")
+        self.stat_new.setStyleSheet("color: #3498db;")
         self.stat_playtime = QLabel("🕒 ZEIT: -")
         self.stat_engine = QLabel("⚙️ ENGINE: -")
+        self.stat_view = QLabel("🔎 VIEW: -")
+        self.stat_view.setStyleSheet("color: #9aa0a6;")
 
         def get_sep():
             sep = QLabel("|")
@@ -884,9 +1288,15 @@ class DoomManagerGUI(QMainWindow):
         stats_layout.addWidget(get_sep())
         stats_layout.addWidget(self.stat_cleared)
         stats_layout.addWidget(get_sep())
+        stats_layout.addWidget(self.stat_favorites)
+        stats_layout.addWidget(get_sep())
+        stats_layout.addWidget(self.stat_new)
+        stats_layout.addWidget(get_sep())
         stats_layout.addWidget(self.stat_playtime)
         stats_layout.addWidget(get_sep())
         stats_layout.addWidget(self.stat_engine)
+        stats_layout.addWidget(get_sep())
+        stats_layout.addWidget(self.stat_view)
         stats_layout.addStretch()
 
         layout.addWidget(self.stats_panel)
@@ -952,6 +1362,132 @@ class DoomManagerGUI(QMainWindow):
         """Liest die Daten aus der Datenbank.""" 
         import dms_core.database as db
         self.all_maps_data = db.get_all_maps()
+
+    def _filter_maps(self, maps):
+        """Filtert Karten anhand Suchfeld und Quick-Filter."""
+        if not hasattr(self, "map_search_input"):
+            return maps
+
+        needle = self.map_search_input.text().strip().lower()
+        active_filter = str(getattr(self, "quick_filter", "ALLE") or "ALLE").upper()
+
+        filtered = []
+        for m in maps:
+            if isinstance(m, dict):
+                map_id = str(m.get("ID", "")).strip().upper()
+                name = str(m.get("Name", "")).strip()
+                iwad = str(m.get("IWAD", "")).strip().lower()
+                kat = str(m.get("Kategorie", "")).strip().upper()
+                fav = str(m.get("Favorite", "0")).strip()
+                nomods = str(m.get("NoMods", "0")).strip()
+                haystack = " ".join([
+                    map_id,
+                    name,
+                    iwad,
+                    kat,
+                ]).lower()
+            else:
+                map_id = str(m[2]) if len(m) > 2 else ""
+                name = str(m[3]) if len(m) > 3 else ""
+                iwad = str(m[4]).lower() if len(m) > 4 else ""
+                kat = str(m[8]).upper() if len(m) > 8 else "PWAD"
+                fav = str(m[12]) if len(m) > 12 else "0"
+                nomods = str(m[1]) if len(m) > 1 else "0"
+                haystack = " ".join([
+                    map_id,
+                    name,
+                    iwad,
+                    kat,
+                ]).lower()
+
+            if active_filter == "DOOM":
+                if ("heretic" in iwad) or ("hexen" in iwad) or ("strife" in iwad) or kat == "EXTRA":
+                    continue
+            elif active_filter == "HERETIC":
+                if "heretic" not in iwad:
+                    continue
+            elif active_filter == "HEXEN":
+                if "hexen" not in iwad:
+                    continue
+            elif active_filter == "FAVORIT":
+                if fav != "1":
+                    continue
+            elif active_filter == "NOMODS":
+                if nomods != "1":
+                    continue
+
+            if needle and needle not in haystack:
+                continue
+
+            filtered.append(m)
+
+        return filtered
+
+    def _extract_sort_fields(self, m):
+        """Extrahiert robuste Sortierfelder für Dict- und Listen-Daten."""
+        if isinstance(m, dict):
+            return {
+                "id": str(m.get("ID", "")).strip().upper(),
+                "name": str(m.get("Name", "")).strip().lower(),
+                "favorite": str(m.get("Favorite", "0")).strip(),
+                "last_played": str(m.get("LastPlayed", "")).strip(),
+            }
+
+        return {
+            "id": str(m[2]).strip().upper() if len(m) > 2 else "",
+            "name": str(m[3]).strip().lower() if len(m) > 3 else "",
+            "favorite": str(m[12]).strip() if len(m) > 12 else "0",
+            "last_played": str(m[10]).strip() if len(m) > 10 else "",
+        }
+
+    def _parse_last_played(self, value):
+        """Parst LastPlayed robust; leere Werte werden als sehr alt behandelt."""
+        txt = str(value or "").strip()
+        if not txt or txt == "-":
+            return datetime.min
+        try:
+            return datetime.strptime(txt, "%Y-%m-%d %H:%M")
+        except Exception:
+            return datetime.min
+
+    def _apply_sort(self, maps):
+        """Sortiert die gefilterte Kartenliste entsprechend der aktiven Auswahl."""
+        mode = str(getattr(self, "sort_mode", "insert") or "insert")
+        items = list(maps)
+
+        if mode == "insert":
+            return items
+        if mode == "newest":
+            return list(reversed(items))
+        if mode == "name_asc":
+            return sorted(items, key=lambda m: self._extract_sort_fields(m)["name"])
+        if mode == "fav_first":
+            return sorted(items, key=lambda m: (self._extract_sort_fields(m)["favorite"] != "1", self._extract_sort_fields(m)["name"]))
+        if mode == "last_played":
+            return sorted(items, key=lambda m: self._parse_last_played(self._extract_sort_fields(m)["last_played"]), reverse=True)
+        return items
+
+    def on_sort_mode_changed(self, _index=None):
+        """Speichert die Sortier-Auswahl und aktualisiert die Tabelle."""
+        if not hasattr(self, "cmb_sort"):
+            return
+        self.sort_mode = str(self.cmb_sort.currentData() or "insert")
+        cfg.update_config_value("SETTINGS", "map_sort_mode", self.sort_mode)
+        self.refresh_data()
+
+    def set_quick_filter(self, filter_key, persist=True):
+        """Aktiviert einen Quick-Filter-Chip und refresh't die Liste."""
+        key = str(filter_key or "ALLE").upper()
+        if key not in getattr(self, "quick_filter_buttons", {}):
+            key = "ALLE"
+
+        self.quick_filter = key
+        for btn_key, btn in self.quick_filter_buttons.items():
+            btn.setChecked(btn_key == key)
+
+        if persist:
+            cfg.update_config_value("SETTINGS", "map_quick_filter", key)
+        self.refresh_data()
 
     def get_checked_mods(self):
         """Durchsucht das Mod-Layout und gibt eine Liste der markierten Mod-Pfade zurück."""
@@ -1157,6 +1693,7 @@ class DoomManagerGUI(QMainWindow):
                     name   = str(m.get("Name", "")).strip()
                     iwad   = str(m.get("IWAD", "")).strip().lower()
                     f_flag = str(m.get("Favorite", "0")).strip()
+                    n_flag = "1" if self._is_recent_install(mid) else "0"
                 else:
                     # Wenn die Daten als Liste kommen (Altes System)
                     if len(m) < 4:
@@ -1167,6 +1704,7 @@ class DoomManagerGUI(QMainWindow):
                     name   = str(m[3]).strip()
                     iwad   = str(m[4]).strip().lower()
                     f_flag = str(m[12]).strip() if len(m) > 12 else "0"
+                    n_flag = "1" if self._is_recent_install(mid) else "0"
             except (KeyError, IndexError, ValueError):
                 # Falls eine Trennzeile verarbeitet wird -> Unsichtbar machen
                 item = QTableWidgetItem("")
@@ -1184,9 +1722,163 @@ class DoomManagerGUI(QMainWindow):
 
             item = QTableWidgetItem(display)
             item.setData(Qt.UserRole, mid)
-            item.setData(Qt.UserRole + 1, {"c": c_flag, "f": f_flag, "m": m_flag, "iwad": iwad})
+            item.setData(Qt.UserRole + 1, {"n": n_flag, "c": c_flag, "f": f_flag, "m": m_flag, "iwad": iwad})
 
             return item
+
+    def _find_preview_image(self, map_data):
+        """Sucht ein passendes Vorschau-Bild im Kartenordner."""
+        map_id = str(map_data.get("ID", "")).strip().upper()
+        if map_id in self.preview_image_cache:
+            return self.preview_image_cache[map_id]
+
+        search_root = self._get_map_content_root(map_data)
+
+        if not search_root or not os.path.isdir(search_root):
+            self.preview_image_cache[map_id] = None
+            return None
+
+        preferred_names = ["preview", "screenshot", "screen", "titlepic", "cover", "map", "shot"]
+        image_exts = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
+
+        best_match = None
+        fallback = None
+
+        for root, _, files in os.walk(search_root):
+            for filename in files:
+                lower = filename.lower()
+                if not lower.endswith(image_exts):
+                    continue
+
+                full_path = os.path.join(root, filename)
+                if fallback is None:
+                    fallback = full_path
+
+                if any(name in lower for name in preferred_names):
+                    best_match = full_path
+                    break
+            if best_match:
+                break
+
+        found = best_match or fallback
+        self.preview_image_cache[map_id] = found
+        return found
+
+    def _get_map_content_root(self, map_data):
+        """Ermittelt den Ordner, in dem Karteninhalte (und Preview-Bilder) liegen."""
+        rel_path = str(map_data.get("Path", "")).strip()
+        kat = str(map_data.get("Kategorie", "PWAD")).strip().upper()
+
+        if kat == "IWAD" or not rel_path or rel_path == "-":
+            return None
+
+        candidate = os.path.join(cfg.PWAD_DIR, rel_path)
+        if os.path.isdir(candidate):
+            return candidate
+        if os.path.isfile(candidate):
+            return os.path.dirname(candidate)
+        return None
+
+    def _set_preview_tag_style(self, iwad, category):
+        """Farbcode je Spieltyp im Preview."""
+        iwad_l = str(iwad or "").lower()
+        cat_u = str(category or "").upper()
+
+        if "heretic" in iwad_l:
+            text, bg = "HERETIC", "#b7950b"
+        elif "hexen" in iwad_l:
+            text, bg = "HEXEN", "#7d3c98"
+        elif "strife" in iwad_l:
+            text, bg = "STRIFE", "#2471a3"
+        elif cat_u == "IWAD":
+            text, bg = "OFFICIAL", "#2d6a4f"
+        else:
+            text, bg = "DOOM", "#c0392b"
+
+        self.preview_tag.setText(text)
+        self.preview_tag.setStyleSheet(f"background-color: {bg}; color: #ffffff; border-radius: 10px; font-size: 11px; font-weight: bold; padding: 0 8px;")
+
+    def preview_set_image(self):
+        """Setzt ein manuelles Vorschaubild fuer die aktuell ausgewaehlte Karte."""
+        if not self.preview_current_map_id:
+            return
+
+        map_data = db.get_map_by_id(self.preview_current_map_id)
+        if not map_data:
+            return
+
+        target_root = self._get_map_content_root(map_data)
+        if not target_root:
+            QMessageBox.information(self, "Preview", "Fuer diese Karte gibt es keinen beschreibbaren PWAD-Ordner.")
+            return
+
+        source_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Vorschaubild waehlen",
+            target_root,
+            "Bilder (*.png *.jpg *.jpeg *.webp *.bmp)",
+        )
+        if not source_path:
+            return
+
+        try:
+            dest_path = os.path.join(target_root, "dms_preview.png")
+            shutil.copy2(source_path, dest_path)
+            self.preview_image_cache.pop(self.preview_current_map_id, None)
+            self.update_map_preview()
+            self.statusBar().showMessage(f"Vorschaubild gesetzt: {self.preview_current_map_id}", 5000)
+        except Exception as e:
+            QMessageBox.warning(self, "Preview-Fehler", f"Bild konnte nicht gespeichert werden:\n{e}")
+
+    def update_map_preview(self):
+        """Aktualisiert das Preview-Panel anhand der aktuell ausgewaehlten Karte."""
+        if not hasattr(self, "preview_title"):
+            return
+
+        selected_items = self.table.selectedItems()
+        target_item = None
+
+        for item in selected_items:
+            if item and item.data(Qt.UserRole):
+                target_item = item
+                break
+
+        if not target_item:
+            current = self.table.currentItem()
+            if current and current.data(Qt.UserRole):
+                target_item = current
+
+        if not target_item:
+            self.preview_current_map_id = None
+            self.preview_title.setText("Keine Karte ausgewaehlt")
+            self.preview_tag.setText("-")
+            self.preview_tag.setStyleSheet("background-color: #3a3a3a; color: #dcdcdc; border-radius: 10px; font-size: 11px; padding: 0 8px;")
+            self.preview_meta.setText("ID: - | IWAD: - | Kategorie: -")
+            self.preview_play.setText("Playtime: 0 min | Last Played: -")
+            self.preview_path.setText("Pfad: -")
+            self.btn_preview_set_image.setEnabled(False)
+            return
+
+        map_id = str(target_item.data(Qt.UserRole)).strip().upper()
+        map_data = db.get_map_by_id(map_id)
+        if not map_data:
+            return
+
+        self.preview_current_map_id = map_id
+        self.btn_preview_set_image.setEnabled(True)
+
+        name = str(map_data.get("Name", "") or map_id)
+        iwad = str(map_data.get("IWAD", "-")).strip()
+        kategorie = str(map_data.get("Kategorie", "-")).strip().upper()
+        playtime = str(map_data.get("Playtime", "0")).strip() or "0"
+        last_played = str(map_data.get("LastPlayed", "-")).strip() or "-"
+        rel_path = str(map_data.get("Path", "-")).strip() or "-"
+
+        self.preview_title.setText(name)
+        self._set_preview_tag_style(iwad, kategorie)
+        self.preview_meta.setText(f"ID: {map_id} | IWAD: {iwad} | Kategorie: {kategorie}")
+        self.preview_play.setText(f"Playtime: {playtime} min | Last Played: {last_played}")
+        self.preview_path.setText(f"Pfad: {rel_path}")
 
     def refresh_data(self):
         """Aktualisiert die Kartentabelle mit den Daten aus der Datenbank."""
@@ -1195,6 +1887,8 @@ class DoomManagerGUI(QMainWindow):
         try:
             # 1. Daten aus der Datenbank holen
             all_m = db.get_all_maps()
+            all_m = self._filter_maps(all_m)
+            all_m = self._apply_sort(all_m)
             
             # 2. Karten verteilen & sortieren
             blocks = {1: [], 2: [], 3: [], 4: [], 5: []}
@@ -1284,6 +1978,18 @@ class DoomManagerGUI(QMainWindow):
         except Exception as e:
             print(f"Fehler beim Laden der Tabelle: {e}")
 
+        # Falls eine neue/gezielte Map markiert werden soll: jetzt in der Tabelle fokussieren.
+        if self.pending_focus_map_id:
+            target_id = self.pending_focus_map_id
+            self.pending_focus_map_id = None
+            if self._focus_map_in_table(target_id):
+                self.statusBar().showMessage(f"Neue Karte gefunden: {target_id}", 7000)
+            else:
+                self.statusBar().showMessage(f"Karte {target_id} wurde installiert, aber nicht direkt gefunden.", 7000)
+
+        if hasattr(self, "preview_title"):
+            self.update_map_preview()
+
         self.update_stats()
 
     def update_stats(self):
@@ -1292,10 +1998,15 @@ class DoomManagerGUI(QMainWindow):
             all_m = db.get_all_maps()
             total = len(all_m)
             cleared = sum(1 for m in all_m if str(m.get("Cleared", "0")) == "1")
+            favorites = sum(1 for m in all_m if str(m.get("Favorite", "0")) == "1")
+            new_count = sum(1 for m in all_m if self._is_recent_install(m.get("ID", "")))
+            clear_percent = int((cleared / total) * 100) if total > 0 else 0
             
             if hasattr(self, 'stat_count'):
                 self.stat_count.setText(f"📂 KARTEN: {total}")
-                self.stat_cleared.setText(f"✅ CLEAR: {cleared}")
+                self.stat_cleared.setText(f"✅ CLEAR: {cleared} ({clear_percent}%)")
+                self.stat_favorites.setText(f"⭐ FAV: {favorites}")
+                self.stat_new.setText(f"🆕 NEW: {new_count}")
                 
                 total_sec = db.get_total_seconds()
                 h, r = divmod(int(total_sec), 3600)
@@ -1304,6 +2015,13 @@ class DoomManagerGUI(QMainWindow):
                 
                 eng = str(cfg.CURRENT_ENGINE).upper() if cfg.CURRENT_ENGINE else "NONE"
                 self.stat_engine.setText(f"⚙️ ENGINE: {eng}")
+
+                needle = self.map_search_input.text().strip() if hasattr(self, "map_search_input") else ""
+                filter_name = str(getattr(self, "quick_filter", "ALLE") or "ALLE")
+                if needle:
+                    self.stat_view.setText(f"🔎 VIEW: {filter_name} | Suche: {needle}")
+                else:
+                    self.stat_view.setText(f"🔎 VIEW: {filter_name}")
         except Exception as e:
             print(f"❌ Statistik-Fehler: {e}")
 
@@ -1325,65 +2043,42 @@ class DoomManagerGUI(QMainWindow):
 # ============================================================================
 
     def run_game(self, map_id):
-        """Startet das Spiel über den Runner und wertet die Session aus."""
-        if not map_id: return
-        
-        # 1. Daten der Map finden
-        r = next((m for m in self.all_maps_data if m['ID'] == map_id), None)
-        if not r: return
+        """Legacy-Wrapper: startet eine Map per ID mit der aktuellen Runner-API."""
+        if not map_id:
+            return
 
-        # 2. Mods aus GUI Checkboxen auslesen
-        selected_mods = []
-        for i in range(self.mod_layout.count()):
-            item = self.mod_layout.itemAt(i)
-            if item:
-                widget = item.widget()
-                if isinstance(widget, QCheckBox) and widget.isChecked():
-                    selected_mods.append(widget.text())
+        map_data = db.get_map_by_id(map_id)
+        if not map_data:
+            QMessageBox.warning(self, "Fehler", f"Karte {map_id} wurde nicht gefunden.")
+            return
 
-        # 3. Vorbereitung der GUI
-        self.statusBar().showMessage(f"Starte {r['Name']}...")
-        self.hide() # Launcher verstecken, während wir zocken
-        
+        active_engine_name = cfg.get_current_engine()
+        if not active_engine_name:
+            QMessageBox.critical(self, "Fehler", "Keine Engine ausgewählt! Geh in den Engine-Manager und aktiviere einen Port.")
+            return
+
+        engine_path = os.path.join(cfg.ENGINE_BASE_DIR, active_engine_name, f"{active_engine_name}.exe")
+        if not os.path.exists(engine_path):
+            QMessageBox.critical(self, "Fehler", f"Die Engine-Datei wurde nicht gefunden:\n{engine_path}")
+            return
+
+        selected_mods = self.get_checked_mods()
+        if str(map_data.get('NoMods', '0')) == "1":
+            selected_mods = []
+
         try:
-            # 4. Der Aufruf an den Runner
-            # WICHTIG: Erledigt Check, Start und Analyse in einem Rutsch
-            result = runner.run_game(map_id, selected_mods=selected_mods)
-            
-            # 5. Launcher nach dem Spiel wieder zeigen
-            self.show()
-            
-            # 6. Fehlerprüfung (z.B. wenn die Engine.exe fehlt)
-            if isinstance(result, dict) and result.get("error"):
-                QMessageBox.critical(self, "Startfehler", result.get("msg"))
-                return
-
-            # 7. Post-Game Auswertung (nur wenn länger als 5 Sek gespielt wurde)
-            duration = result.get('duration_seconds', 0) if result else 0
-            
-            if duration > 5:
-                # Statistiken in der Tabelle aktualisieren
-                self.refresh_data() 
-                
-                m, s = divmod(duration, 60)
-                stats = result.get('stats', {})
-                weapons = result.get('weapons', [])
-                
-                msg = (f"Spielzeit: {m} Min. {s} Sek.\n\n"
-                       f"GESAMMELT:\n"
-                       f"✚ Heilung: {stats.get('health', 0)}  |  🛡 Rüstung: {stats.get('armor', 0)}\n"
-                       f"📦 Munition: {stats.get('ammo', 0)}  |  🔑 Schlüssel: {stats.get('key', 0)}\n\n"
-                       f"WAFFEN GEFUNDEN:\n"
-                       f"{', '.join(weapons) if weapons else 'Keine neuen Waffen.'}")
-                       
-                QMessageBox.information(self, "Session Analyse", msg)
-                
+            self.statusBar().showMessage(f"Starte {map_data.get('Name', map_id)}...")
+            success = runner.run_game(engine_path, map_data, selected_mods)
+            if success:
+                self.refresh_data()
+            else:
+                QMessageBox.warning(self, "Start fehlgeschlagen", "Das Spiel konnte nicht gestartet werden. Prüfe die Konsole/Logs.")
         except Exception as e:
-            self.show()
             QMessageBox.critical(self, "Kritischer Fehler", f"Fehler im Ablauf:\n{str(e)}")
                 
     def run_installer(self):
         """Installiert Doomworld-Download oder importiert lokale Dateien aus Install/."""
+        before_ids = {str(m.get("ID", "")).strip().upper() for m in db.get_all_maps() if m.get("ID")}
         selected_row = self.table.currentRow()
         
         if selected_row >= 0:
@@ -1410,6 +2105,11 @@ class DoomManagerGUI(QMainWindow):
         )
         
         if count > 0:
+            after_ids = {str(m.get("ID", "")).strip().upper() for m in db.get_all_maps() if m.get("ID")}
+            new_ids = sorted(after_ids - before_ids, key=self._sort_map_id_key)
+            if new_ids:
+                self.mark_maps_as_new(new_ids)
+                self.set_pending_focus_map(new_ids[-1])
             self.refresh_data()
             QMessageBox.information(self, "Auto-Installer", f"{count} Karte(n) erfolgreich aus dem Install-Ordner importiert!")
         else:
@@ -1528,6 +2228,7 @@ class DoomManagerGUI(QMainWindow):
         }
 
         if db.insert_map(map_data):
+            self.set_pending_focus_map(custom_id)
             self.refresh_data()
             QMessageBox.information(self, "Erfolg", f"Karte '{title}' wurde als {custom_id} hinzugefügt.")
         else:
@@ -1535,15 +2236,27 @@ class DoomManagerGUI(QMainWindow):
 
     def play_random(self):
         """Wird aufgerufen, wenn man auf 'ZUFALL' klickt."""
-        if not self.all_maps_data: return
-        random_map = random.choice(self.all_maps_data)
-        
-        # In der Tabelle auswählen und starten
-        items = self.table.findItems(random_map['ID'], Qt.MatchExactly)
-        if items:
-            self.table.selectRow(items[0].row())
-        
-        self.run_game(random_map['ID'])
+        visible_map_ids = []
+
+        for row in range(self.table.rowCount()):
+            for col in range(self.table.columnCount()):
+                item = self.table.item(row, col)
+                if not item:
+                    continue
+
+                map_id = str(item.data(Qt.UserRole) or "").strip().upper()
+                if map_id:
+                    visible_map_ids.append((map_id, item))
+
+        if not visible_map_ids:
+            QMessageBox.information(self, "Keine Karte", "Aktuell ist keine sichtbare Karte fuer Zufall verfuegbar.")
+            return
+
+        selected_map_id, selected_item = random.choice(visible_map_ids)
+        self.table.setCurrentItem(selected_item)
+        self.table.scrollToItem(selected_item, QAbstractItemView.ScrollHint.PositionAtCenter)
+
+        self.run_game(selected_map_id)
 
     def check_updates(self):
         """Prüft im Hintergrund auf Launcher-Updates."""

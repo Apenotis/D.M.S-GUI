@@ -1,11 +1,22 @@
 import configparser
 import os
+import sys
 
 # ============================================================================
 # PFADE & KONSTANTEN
 # ============================================================================
 APP_VERSION = "3.1"
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _resolve_base_dir() -> str:
+    """Ermittelt den Arbeitsordner fuer Quelle und gebaute EXE konsistent."""
+    if getattr(sys, "frozen", False):
+        # Bei PyInstaller auf den Ordner der EXE zeigen, nicht auf _internal.
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+BASE_DIR = _resolve_base_dir()
 CONFIG_FILE = os.path.join(BASE_DIR, "config.ini")
 IWAD_DIR = os.path.join(BASE_DIR, "iwad")
 PWAD_DIR = os.path.join(BASE_DIR, "pwad")
