@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.venv/
+
+# Logs
+*.log
+dms_error.log
+dms_tracker.log
+
+# Local runtime data and binaries
+Engines/
+iwad/
+pwad/
+mods/
+Install/
+*.wad
+*.pk3
+*.pk7
+*.zip
+*.7z
+
+# SQLite/runtime artifacts
+maps.db
+maps.csv
+*.bak
+*.broken
+
+# Generated snapshots and local test clones
+_test_snapshots/
+test_*/
+
+# IDE/OS
+.vscode/
+.DS_Store
+Thumbs.db
