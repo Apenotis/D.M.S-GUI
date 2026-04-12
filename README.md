@@ -9,94 +9,73 @@ It helps you manage engines, install maps, organize your library, and start game
 - Installs maps from Doomworld (idgames API)
 - Installs custom maps from local files/folders
 - Manages map metadata in a local SQLite database
-- Supports map status flags like clear, favorite, and no-mod mode
-- Tracks total playtime and last played information
+- Supports map status flags: Clear, Favorite, NoMods
+- Tracks total playtime and last played info
+- Live search, quick filter chips, sort modes
+- NEW badge for recently installed maps (72h window)
+- Install toast notification with jump-to-map button
+- Map preview panel with game-type tag
+- In-app changelog / What's New dialog
 
 ## Core Features
 
-### 1. Engine Management
-- Supported engines include:
-  - gzdoom
-  - uzdoom
-  - dsda-doom
-  - woof
-  - nugget-doom
-  - odamex
-  - zandronum
-  - lzdoom
-- Engine install/update from configured release sources
-- Active engine selection in GUI
+### Engine Management
+- Supported engines: gzdoom, uzdoom, dsda-doom, woof, nugget-doom, odamex, zandronum, lzdoom
+- Install/update engines directly from the GUI
 
-### 2. Map Installation
+### Map Installation
+- Browse and install from Doomworld idgames API
+- Import local files/folders
+- Maps are auto-registered in the local SQLite database
 
-#### Doomworld API Import
-- Browse and search idgames content
-- Install directly from the API browser
-- Auto-register installed maps in the local database
+### Library Management
+- Clear / Favorite / NoMods flags per map
+- Per-map custom launch arguments
+- Context menu for quick actions
+- Sort by: Insertion Order, Newest First, Name A-Z, Favorites First, Last Played
 
-#### Manual/Custom Import
-- Import from local files via Install flow
-- Manual map entry form in GUI for custom records
-- Supports multiple categories (IWAD/PWAD/EXTRA)
+### Mod Management
+- Mod checkbox panel (doom / heretic / hexen / Wolfenstein categories)
+- Recursive mod file discovery at launch
 
-### 3. Library Management
-- Clear tag per map (Cleared)
-- Favorite tag per map (Favorite)
-- NoMods flag per map (NoMods)
-- Per-map custom launch arguments (ARGS)
-- Context menu actions for quick updates
-
-### 4. Mod Management
-- Mod checkbox panel in GUI
-- Category folders:
-  - mods/doom
-  - mods/heretic
-  - mods/hexen
-  - mods/Wolfenstein
-- Recursive mod file discovery during launch
-
-### 5. Tracking and Stats
-- Total playtime tracking
-- Last played timestamp
-- Session/game result integration
-- Optional debugger/tracker toggle in GUI
-
-### 6. Database and Tools
-- Uses SQLite (`maps.db`) as local data storage
-- DB Viewer dialog with:
-  - filtering (category/IWAD/search)
-  - CSV export
-  - JSON export
+### Stats Dashboard
+- Cleared %, Favorites count, NEW count, current view label
+- Total playtime and last played timestamps
 
 ## Project Structure
 
-- `Gui.py` - Main GUI application
-- `dms_core/` - Core modules (config, db, installer, runner, updater, api, etc.)
-- `config.ini` - Runtime settings
-- `maps.db` - SQLite database
-- `start.bat` - Quick launcher
+```
+start.bat       # Quick launcher (Windows)
+Gui.py          # Main GUI application
+dms_core/       # Core modules: config, database, api, game_runner, installer, engine_manager, updater, ...
+```
 
-## First Start
-
-You can start with a minimal package (`Gui.py`, `start.bat`, `dms_core/`).
-On first run, the app/bootstrap setup creates required folders and config/database scaffolding.
+On first run the app creates all required folders (`iwad/`, `pwad/`, `mods/`, `Engines/`) and scaffolds `config.ini` and `maps.db` automatically.
 
 ## Run
 
-### Windows (recommended)
-- Run `start.bat`
+### Windows — Compiled Release (recommended)
+Download the latest release zip, extract it, and run `DMS-GUI.exe` inside the folder.
 
-### Python
-- Run `python Gui.py`
+### Windows — From Source
+```
+start.bat
+```
 
-## Snapshot Tool (Testing)
+### Python (any platform)
+```
+python Gui.py
+```
 
-The project includes a snapshot helper for quick test copies:
+## Release Contents
 
-- `make_test_snapshot.bat`
-- `make_test_snapshot.py`
-
-Default mode is `minimal`.
+The release zip (`dms-v3.1-win64.zip`) contains a self-contained Windows build:
+```
+DMS-GUI/
+  DMS-GUI.exe       # Main executable
+  _internal/        # PySide6 runtime and dependencies
+```
+No Python installation required.
 
 ## Notes
 
