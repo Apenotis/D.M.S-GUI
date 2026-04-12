@@ -33,6 +33,24 @@ maps.csv
 _test_snapshots/
 test_*/
 
+# Build/release artifacts (not for public repo)
+build/
+dist/
+*.spec
+dms-v*.zip
+*.zip
+
+# Dev/test tools (not for public repo)
+build_exe.py
+build_exe.bat
+code_checker.py
+make_test_snapshot.py
+make_test_snapshot.bat
+
+# Local config and runtime data (not for public repo)
+config.ini
+maps.backup_*.db
+
 # IDE/OS
 .vscode/
 .DS_Store
