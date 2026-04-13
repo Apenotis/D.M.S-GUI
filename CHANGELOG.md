@@ -1,5 +1,14 @@
 # Changelog
 
+## [3.2.1] - 2026-04-13
+
+### Fixed
+- Updater now reads launcher version from a dedicated version source (`UPDATE.launcher_version_file`) to avoid mixed file responsibilities.
+- Updater now writes to the configured launcher target file path instead of always using the running script path.
+- Added safety guards so updates can only write Python files inside the launcher base directory.
+- Added payload validation for `Gui.py` updates (rejects invalid code that does not look like launcher GUI code).
+- Rollback and backup lookup now use the configured launcher target consistently.
+
 ## [3.2] - 2026-04-13
 
 ### Added

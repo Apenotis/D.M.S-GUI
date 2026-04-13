@@ -60,6 +60,7 @@ def run_initial_setup() -> bool:
             "launcher_repo": config.get("UPDATE", "launcher_repo", fallback=""),
             "launcher_branch": config.get("UPDATE", "launcher_branch", fallback="main"),
             "launcher_file": config.get("UPDATE", "launcher_file", fallback="Gui.py"),
+            "launcher_version_file": config.get("UPDATE", "launcher_version_file", fallback="dms_core/config.py"),
         },
     }
 
