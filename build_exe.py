@@ -13,6 +13,23 @@ def main() -> int:
     dist_path = root / "dist" / dist_subdir
     build_path = root / "build" / dist_subdir
 
+    dms_hidden = [
+        "dms_core.config",
+        "dms_core.database",
+        "dms_core.api",
+        "dms_core.engine_manager",
+        "dms_core.game_runner",
+        "dms_core.initialization",
+        "dms_core.installer",
+        "dms_core.map_loader",
+        "dms_core.setup_wizard",
+        "dms_core.updater",
+        "dms_core.utils",
+    ]
+    hidden_args = []
+    for mod in dms_hidden:
+        hidden_args += ["--hidden-import", mod]
+
     cmd = [
         sys.executable,
         "-m",
@@ -27,6 +44,7 @@ def main() -> int:
         str(dist_path),
         "--workpath",
         str(build_path),
+        *hidden_args,
         "Gui.py",
     ]
 

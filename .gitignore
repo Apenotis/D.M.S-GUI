@@ -46,6 +46,7 @@ build_exe.bat
 code_checker.py
 make_test_snapshot.py
 make_test_snapshot.bat
+release.ps1
 
 # Local config and runtime data (not for public repo)
 config.ini

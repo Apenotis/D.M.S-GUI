@@ -6,7 +6,6 @@ import random
 import logging
 import traceback
 import configparser
-import shutil
 from datetime import datetime, timedelta
 
 # Nur die Widgets, die wirklich im Code vorkommen
@@ -18,8 +17,8 @@ from PySide6.QtWidgets import (
     QComboBox, QFileDialog, QSizePolicy,
     QInputDialog, QStyledItemDelegate, QStyle
 )
-from PySide6.QtCore import Qt, Signal, QRect, QSize, QTimer
-from PySide6.QtGui import QAction, QIcon, QColor, QFont, QPainter, QBrush
+from PySide6.QtCore import Qt, Signal, QRect, QSize, QTimer, QPoint
+from PySide6.QtGui import QAction, QIcon, QColor, QFont, QPainter, QBrush, QFontMetrics, QLinearGradient, QPolygon
 
 # ============================================================================
 # CORE-MODULE IMPORTIEREN
@@ -99,7 +98,12 @@ class MapItemDelegate(QStyledItemDelegate):
 
     def paint(self, painter: QPainter, option, index):
         flags = index.data(Qt.UserRole + 1)
+        map_id = str(index.data(Qt.UserRole) or "").strip().upper()
+        table = self.parent()
         is_enabled = bool(index.flags() & Qt.ItemFlag.ItemIsEnabled)
+        is_selected = bool(option.state & QStyle.State_Selected)
+        is_hovered = bool(option.state & QStyle.State_MouseOver)
+        is_pressed = bool(option.state & QStyle.State_Sunken)
 
         painter.save()
         rect = option.rect
@@ -110,10 +114,8 @@ class MapItemDelegate(QStyledItemDelegate):
             painter.restore()
             return
 
-        # --- Hintergrundfarbe je nach Zustand ---
-        if option.state & QStyle.State_Selected:
-            bg = QColor("#333333")
-        elif option.state & QStyle.State_MouseOver:
+        # --- Hintergrundfarbe: bei Klick nicht extra faerben, nur Hover bleibt etwas heller ---
+        if is_hovered:
             bg = QColor("#2a2a2a")
         else:
             bg = QColor("#222222")
@@ -138,7 +140,72 @@ class MapItemDelegate(QStyledItemDelegate):
             accent = self.ACCENT["doom"]
 
         bar = QRect(rect.left() + 6, rect.top() + 5, 3, rect.height() - 10)
-        painter.fillRect(bar, accent)
+
+        # Hover-Effekt: links leichtes Leuchten am Akzentbalken.
+        if is_hovered:
+            glow = QRect(bar.left() - 3, bar.top() - 2, bar.width() + 8, bar.height() + 4)
+            glow_color = QColor(accent)
+            glow_color.setAlpha(80)
+            painter.fillRect(glow, glow_color)
+
+        bar_color = QColor(accent)
+        if is_hovered:
+            bar_color = bar_color.lighter(145)
+        painter.fillRect(bar, bar_color)
+
+        is_animating_this_item = bool(
+            table
+            and map_id
+            and map_id == str(getattr(table, "click_fill_map_id", "") or "")
+            and (
+                bool(getattr(table, "click_fill_armed", False))
+                or float(getattr(table, "click_fill_progress", 0.0) or 0.0) > 0.0
+            )
+        )
+
+        # Endfarbe erst nach abgeschlossener Animation dauerhaft halten.
+        if is_selected and not is_animating_this_item:
+            hold_rect = rect.adjusted(1, 1, -1, -1)
+            hold_base = QColor(accent)
+            hold_base.setAlpha(186)
+            painter.fillRect(hold_rect, hold_base)
+
+        # Klick-Animation: Slider-Fill von links nach rechts.
+        if table and map_id and map_id == str(getattr(table, "click_fill_map_id", "") or ""):
+            progress = float(getattr(table, "click_fill_progress", 0.0) or 0.0)
+            if progress > 0.0:
+                p = min(1.0, max(0.0, progress))
+                fill_rect = rect.adjusted(1, 1, -1, -1)
+                fill_w = int(fill_rect.width() * p)
+                if fill_w > 0:
+                    left = fill_rect.left()
+                    top = fill_rect.top()
+                    bottom = fill_rect.bottom()
+                    right_limit = fill_rect.right()
+
+                    # 45°-Frontkante ohne Naht: ein einziges Polygon statt Rechteck + Kopf.
+                    slant = max(6, fill_rect.height() - 1)
+
+                    # Die Front laeuft intern weiter (width + slant), damit die
+                    # Animation erst endet, wenn auch die untere Spitze den Rand erreicht.
+                    travel = fill_rect.width() + slant
+                    front_pos = left + int(travel * p)
+
+                    front_top = min(right_limit, front_pos)
+                    front_bottom = max(left, min(right_limit, front_pos - slant))
+
+                    slider_poly = QPolygon([
+                        QPoint(left, top),
+                        QPoint(front_top, top),
+                        QPoint(front_bottom, bottom),
+                        QPoint(left, bottom),
+                    ])
+
+                    slider_color = QColor(accent)
+                    slider_color.setAlpha(186)
+                    painter.setPen(Qt.NoPen)
+                    painter.setBrush(slider_color)
+                    painter.drawPolygon(slider_poly)
 
         # --- Badges rechts berechnen (erst messen, dann Text zeichnen) ---
         badge_font = QFont("Segoe UI", 7, QFont.Bold)
@@ -167,7 +234,7 @@ class MapItemDelegate(QStyledItemDelegate):
 
         if flags.get("f") == "1":
             painter.setPen(QColor("#FFD700"))
-        elif option.state & QStyle.State_Selected:
+        elif is_selected:
             painter.setPen(QColor("#ffffff"))
         else:
             painter.setPen(QColor("#dddddd"))
@@ -473,11 +540,27 @@ class ApiBrowserDialog(QDialog):
         if row < 0: return
         file_data = self.current_results[row]
         
-        self.status_bottom.setText(f"Downloade: {file_data.get('title')}...")
-        self.btn_download.setEnabled(False)
+        # Show a progress notice so the user knows the download started
+        wait_dlg = QDialog(self)
+        wait_dlg.setWindowTitle("Installing...")
+        wait_dlg.setModal(True)
+        wait_dlg.setFixedSize(380, 110)
+        wait_layout = QVBoxLayout(wait_dlg)
+        wait_label = QLabel(f"\u2b07  Downloading and installing:\n\n  {file_data.get('title', '')}\n\nPlease wait...")
+        wait_label.setWordWrap(True)
+        wait_layout.addWidget(wait_label)
+        wait_dlg.show()
         QApplication.processEvents()
         
-        success, msg = api.download_idgames_gui(file_data, callback=lambda t: self.status_bottom.setText(t))
+        self.btn_download.setEnabled(False)
+        
+        def _update(t):
+            self.status_bottom.setText(t)
+            wait_label.setText(f"\u2b07  {t}")
+            QApplication.processEvents()
+        
+        success, msg = api.download_idgames_gui(file_data, callback=_update)
+        wait_dlg.close()
         
         if success:
             QMessageBox.information(self, "Erfolg", f"Download abgeschlossen!\nID: {msg}")
@@ -744,9 +827,14 @@ class DoomManagerGUI(QMainWindow):
         self.sort_mode = cfg.config.get("SETTINGS", "map_sort_mode", fallback="insert")
         self.quick_filter = cfg.config.get("SETTINGS", "map_quick_filter", fallback="ALLE").upper()
         self.recent_installs = self._load_recent_installs()
-        self.preview_current_map_id = None
-        self.preview_image_cache = {}
+        self.preview_title_full_text = "Keine Karte ausgewaehlt"
+        self.preview_path_full_text = "Pfad: -"
         self.install_toast = None
+        self.click_fill_map_id = ""
+        self.click_fill_progress = 0.0
+        self.click_fill_timer = QTimer(self)
+        self.click_fill_timer.setInterval(20)
+        self.click_fill_timer.timeout.connect(self._advance_click_fill)
         self.signal_refresh.connect(self.refresh_data)
 
         self.setup_ui()
@@ -808,7 +896,7 @@ class DoomManagerGUI(QMainWindow):
             "- Button 'Anspringen' springt direkt zur Karte<br><br>"
             "<b>Komfort</b><br>"
             "- Zufallskarte nutzt sichtbare/gefilterte Karten<br>"
-            "- Preview-Panel mit Map-Metadaten + Bild setzen<br>"
+            "- Preview-Panel mit Map-Metadaten<br>"
             "- Dashboard erweitert (Clear %, FAV, NEW, VIEW)"
         )
 
@@ -1000,12 +1088,16 @@ class DoomManagerGUI(QMainWindow):
                 border: none;
             }
         """)
+        self.table.click_fill_map_id = ""
+        self.table.click_fill_progress = 0.0
+        self.table.click_fill_armed = False
         self.table.setItemDelegate(MapItemDelegate(self.table))
         # ------------------------------
 
         # Signale für die Tabelle
         self.table.customContextMenuRequested.connect(self.show_context_menu)
         self.table.itemDoubleClicked.connect(self.run_selected_map)
+        self.table.itemPressed.connect(self.on_table_item_pressed)
         self.table.itemSelectionChanged.connect(self.update_map_preview)
 
         header_container = QWidget()
@@ -1070,7 +1162,7 @@ class DoomManagerGUI(QMainWindow):
         lbl_sort = QLabel("Sortierung:")
         lbl_sort.setStyleSheet("color: #bcbcbc; font-weight: bold;")
         self.cmb_sort = QComboBox()
-        self.cmb_sort.addItem("Insertion Order", "insert")
+        self.cmb_sort.addItem("Default", "insert")
         self.cmb_sort.addItem("Neueste zuerst", "newest")
         self.cmb_sort.addItem("Name A-Z", "name_asc")
         self.cmb_sort.addItem("Favoriten zuerst", "fav_first")
@@ -1144,36 +1236,32 @@ class DoomManagerGUI(QMainWindow):
             QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #aaa; }
         """)
         preview_layout = QVBoxLayout()
-        preview_layout.setContentsMargins(8, 10, 8, 8)
-        preview_layout.setSpacing(4)
+        preview_layout.setContentsMargins(8, 8, 8, 6)
+        preview_layout.setSpacing(3)
 
         self.preview_title = QLabel("Keine Karte ausgewaehlt")
         self.preview_title.setStyleSheet("color: #ecf0f1; font-size: 13px; font-weight: bold;")
+        self.preview_title.setWordWrap(False)
+        self.preview_title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.preview_tag = QLabel("-")
         self.preview_tag.setAlignment(Qt.AlignCenter)
         self.preview_tag.setFixedHeight(20)
+        self.preview_tag.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self.preview_tag.setStyleSheet("background-color: #3a3a3a; color: #dcdcdc; border-radius: 10px; font-size: 11px; padding: 0 8px;")
-        self.preview_meta = QLabel("ID: - | IWAD: - | Kategorie: -")
+        self.preview_meta = QLabel("ID: - | IWAD: -\nKategorie: -")
         self.preview_meta.setStyleSheet("color: #b8b8b8;")
-        self.preview_play = QLabel("Playtime: 0 min | Last Played: -")
+        self.preview_play = QLabel("Playtime: 0 min\nLast Played: -")
         self.preview_play.setStyleSheet("color: #9aa0a6;")
         self.preview_path = QLabel("Pfad: -")
         self.preview_path.setStyleSheet("color: #8f8f8f;")
-        self.preview_path.setWordWrap(True)
-
-        preview_buttons = QHBoxLayout()
-        self.btn_preview_set_image = QPushButton("🖼 Bild setzen")
-        self.btn_preview_set_image.setMinimumHeight(30)
-        self.btn_preview_set_image.clicked.connect(self.preview_set_image)
-        preview_buttons.addWidget(self.btn_preview_set_image)
-        preview_buttons.addStretch()
+        self.preview_path.setWordWrap(False)
+        self.preview_path.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
 
         preview_layout.addWidget(self.preview_title)
-        preview_layout.addWidget(self.preview_tag)
+        preview_layout.addWidget(self.preview_tag, 0, Qt.AlignLeft)
         preview_layout.addWidget(self.preview_meta)
         preview_layout.addWidget(self.preview_play)
         preview_layout.addWidget(self.preview_path)
-        preview_layout.addLayout(preview_buttons)
         preview_group.setLayout(preview_layout)
         right_layout.addWidget(preview_group)
         
@@ -1302,6 +1390,94 @@ class DoomManagerGUI(QMainWindow):
         layout.addWidget(self.stats_panel)
 
         self.update_stats()
+
+    def resizeEvent(self, event):
+        """Haelt den Pfadtext im Preview bei Fenstergroessenwechsel sauber gekuerzt."""
+        super().resizeEvent(event)
+        self._refresh_preview_title_text()
+        self._refresh_preview_path_text()
+
+    def on_table_item_pressed(self, item):
+        """Startet eine kurze Fuell-Animation fuer die angeklickte Karte."""
+        if not item:
+            return
+
+        map_id = str(item.data(Qt.UserRole) or "").strip().upper()
+        if not map_id:
+            return
+
+        # Verhindert einen direkten Doppelstart beim gleichen Klick-Ereignis.
+        if self.click_fill_timer.isActive() and self.click_fill_map_id == map_id and self.click_fill_progress < 0.18:
+            return
+
+        self.table.setCurrentItem(item)
+        self.click_fill_map_id = map_id
+        self.click_fill_progress = 0.0
+        self.table.click_fill_map_id = map_id
+        self.table.click_fill_progress = 0.0
+        self.table.click_fill_armed = True
+        if self.click_fill_timer.isActive():
+            self.click_fill_timer.stop()
+        self.click_fill_timer.start()
+        self.table.viewport().update()
+
+    def _advance_click_fill(self):
+        """Tick fuer den Fuellbalken beim Klick."""
+        self.click_fill_progress += 0.03
+        if hasattr(self, "table"):
+            self.table.click_fill_progress = self.click_fill_progress
+            if self.click_fill_progress > 0.0:
+                self.table.click_fill_armed = False
+
+        if self.click_fill_progress >= 1.0:
+            self.click_fill_progress = 0.0
+            self.click_fill_map_id = ""
+            if hasattr(self, "table"):
+                self.table.click_fill_progress = 0.0
+                self.table.click_fill_map_id = ""
+                self.table.click_fill_armed = False
+            self.click_fill_timer.stop()
+
+        if hasattr(self, "table"):
+            self.table.viewport().update()
+
+    def _set_preview_title(self, title):
+        """Setzt den vollen Titeltext und aktualisiert die sichtbare, gekuerzte Anzeige."""
+        clean_title = str(title or "Keine Karte ausgewaehlt").strip() or "Keine Karte ausgewaehlt"
+        self.preview_title_full_text = clean_title
+        self._refresh_preview_title_text()
+
+    def _refresh_preview_title_text(self):
+        """Zeigt den Titel mit Ellipse an, ohne das rechte Panel zu verbreitern."""
+        if not hasattr(self, "preview_title"):
+            return
+
+        full_text = str(getattr(self, "preview_title_full_text", "Keine Karte ausgewaehlt") or "Keine Karte ausgewaehlt")
+        self.preview_title.setToolTip(full_text if full_text != "Keine Karte ausgewaehlt" else "")
+
+        metrics = QFontMetrics(self.preview_title.font())
+        available_width = max(120, self.preview_title.width() - 6)
+        elided = metrics.elidedText(full_text, Qt.TextElideMode.ElideRight, available_width)
+        self.preview_title.setText(elided)
+
+    def _set_preview_path(self, rel_path):
+        """Setzt den vollen Pfadtext und aktualisiert die sichtbare, gekuerzte Anzeige."""
+        clean_rel = str(rel_path or "-").strip() or "-"
+        self.preview_path_full_text = f"Pfad: {clean_rel}"
+        self._refresh_preview_path_text()
+
+    def _refresh_preview_path_text(self):
+        """Zeigt den Pfad mit Ellipse an, ohne das rechte Panel zu verbreitern."""
+        if not hasattr(self, "preview_path"):
+            return
+
+        full_text = str(getattr(self, "preview_path_full_text", "Pfad: -") or "Pfad: -")
+        self.preview_path.setToolTip(full_text if full_text != "Pfad: -" else "")
+
+        metrics = QFontMetrics(self.preview_path.font())
+        available_width = max(120, self.preview_path.width() - 6)
+        elided = metrics.elidedText(full_text, Qt.TextElideMode.ElideMiddle, available_width)
+        self.preview_path.setText(elided)
 
     def populate_mods(self):
         """Lädt alle Mods sortiert nach Kategorien und baut das Menü auf."""
@@ -1726,59 +1902,6 @@ class DoomManagerGUI(QMainWindow):
 
             return item
 
-    def _find_preview_image(self, map_data):
-        """Sucht ein passendes Vorschau-Bild im Kartenordner."""
-        map_id = str(map_data.get("ID", "")).strip().upper()
-        if map_id in self.preview_image_cache:
-            return self.preview_image_cache[map_id]
-
-        search_root = self._get_map_content_root(map_data)
-
-        if not search_root or not os.path.isdir(search_root):
-            self.preview_image_cache[map_id] = None
-            return None
-
-        preferred_names = ["preview", "screenshot", "screen", "titlepic", "cover", "map", "shot"]
-        image_exts = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
-
-        best_match = None
-        fallback = None
-
-        for root, _, files in os.walk(search_root):
-            for filename in files:
-                lower = filename.lower()
-                if not lower.endswith(image_exts):
-                    continue
-
-                full_path = os.path.join(root, filename)
-                if fallback is None:
-                    fallback = full_path
-
-                if any(name in lower for name in preferred_names):
-                    best_match = full_path
-                    break
-            if best_match:
-                break
-
-        found = best_match or fallback
-        self.preview_image_cache[map_id] = found
-        return found
-
-    def _get_map_content_root(self, map_data):
-        """Ermittelt den Ordner, in dem Karteninhalte (und Preview-Bilder) liegen."""
-        rel_path = str(map_data.get("Path", "")).strip()
-        kat = str(map_data.get("Kategorie", "PWAD")).strip().upper()
-
-        if kat == "IWAD" or not rel_path or rel_path == "-":
-            return None
-
-        candidate = os.path.join(cfg.PWAD_DIR, rel_path)
-        if os.path.isdir(candidate):
-            return candidate
-        if os.path.isfile(candidate):
-            return os.path.dirname(candidate)
-        return None
-
     def _set_preview_tag_style(self, iwad, category):
         """Farbcode je Spieltyp im Preview."""
         iwad_l = str(iwad or "").lower()
@@ -1797,38 +1920,6 @@ class DoomManagerGUI(QMainWindow):
 
         self.preview_tag.setText(text)
         self.preview_tag.setStyleSheet(f"background-color: {bg}; color: #ffffff; border-radius: 10px; font-size: 11px; font-weight: bold; padding: 0 8px;")
-
-    def preview_set_image(self):
-        """Setzt ein manuelles Vorschaubild fuer die aktuell ausgewaehlte Karte."""
-        if not self.preview_current_map_id:
-            return
-
-        map_data = db.get_map_by_id(self.preview_current_map_id)
-        if not map_data:
-            return
-
-        target_root = self._get_map_content_root(map_data)
-        if not target_root:
-            QMessageBox.information(self, "Preview", "Fuer diese Karte gibt es keinen beschreibbaren PWAD-Ordner.")
-            return
-
-        source_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Vorschaubild waehlen",
-            target_root,
-            "Bilder (*.png *.jpg *.jpeg *.webp *.bmp)",
-        )
-        if not source_path:
-            return
-
-        try:
-            dest_path = os.path.join(target_root, "dms_preview.png")
-            shutil.copy2(source_path, dest_path)
-            self.preview_image_cache.pop(self.preview_current_map_id, None)
-            self.update_map_preview()
-            self.statusBar().showMessage(f"Vorschaubild gesetzt: {self.preview_current_map_id}", 5000)
-        except Exception as e:
-            QMessageBox.warning(self, "Preview-Fehler", f"Bild konnte nicht gespeichert werden:\n{e}")
 
     def update_map_preview(self):
         """Aktualisiert das Preview-Panel anhand der aktuell ausgewaehlten Karte."""
@@ -1849,23 +1940,18 @@ class DoomManagerGUI(QMainWindow):
                 target_item = current
 
         if not target_item:
-            self.preview_current_map_id = None
-            self.preview_title.setText("Keine Karte ausgewaehlt")
+            self._set_preview_title("Keine Karte ausgewaehlt")
             self.preview_tag.setText("-")
             self.preview_tag.setStyleSheet("background-color: #3a3a3a; color: #dcdcdc; border-radius: 10px; font-size: 11px; padding: 0 8px;")
-            self.preview_meta.setText("ID: - | IWAD: - | Kategorie: -")
-            self.preview_play.setText("Playtime: 0 min | Last Played: -")
-            self.preview_path.setText("Pfad: -")
-            self.btn_preview_set_image.setEnabled(False)
+            self.preview_meta.setText("ID: - | IWAD: -\nKategorie: -")
+            self.preview_play.setText("Playtime: 0 min\nLast Played: -")
+            self._set_preview_path("-")
             return
 
         map_id = str(target_item.data(Qt.UserRole)).strip().upper()
         map_data = db.get_map_by_id(map_id)
         if not map_data:
             return
-
-        self.preview_current_map_id = map_id
-        self.btn_preview_set_image.setEnabled(True)
 
         name = str(map_data.get("Name", "") or map_id)
         iwad = str(map_data.get("IWAD", "-")).strip()
@@ -1874,11 +1960,11 @@ class DoomManagerGUI(QMainWindow):
         last_played = str(map_data.get("LastPlayed", "-")).strip() or "-"
         rel_path = str(map_data.get("Path", "-")).strip() or "-"
 
-        self.preview_title.setText(name)
+        self._set_preview_title(name)
         self._set_preview_tag_style(iwad, kategorie)
-        self.preview_meta.setText(f"ID: {map_id} | IWAD: {iwad} | Kategorie: {kategorie}")
-        self.preview_play.setText(f"Playtime: {playtime} min | Last Played: {last_played}")
-        self.preview_path.setText(f"Pfad: {rel_path}")
+        self.preview_meta.setText(f"ID: {map_id} | IWAD: {iwad}\nKategorie: {kategorie}")
+        self.preview_play.setText(f"Playtime: {playtime} min\nLast Played: {last_played}")
+        self._set_preview_path(rel_path)
 
     def refresh_data(self):
         """Aktualisiert die Kartentabelle mit den Daten aus der Datenbank."""
@@ -2088,8 +2174,26 @@ class DoomManagerGUI(QMainWindow):
             if map_data and isinstance(map_data, dict):
                 # Download/Install von Doomworld
                 title = map_data.get('title', 'Unbekannt')
-                self.statusBar().showMessage(f"Lade '{title}' herunter...")
-                success, _ = api.download_idgames_gui(map_data, callback=lambda m: self.statusBar().showMessage(m))
+
+                # Progress popup so user knows the download started
+                wait_dlg = QDialog(self)
+                wait_dlg.setWindowTitle("Installing...")
+                wait_dlg.setModal(True)
+                wait_dlg.setFixedSize(380, 110)
+                wait_layout = QVBoxLayout(wait_dlg)
+                wait_label = QLabel(f"\u2b07  Downloading and installing:\n\n  {title}\n\nPlease wait...")
+                wait_label.setWordWrap(True)
+                wait_layout.addWidget(wait_label)
+                wait_dlg.show()
+                QApplication.processEvents()
+
+                def _update(m):
+                    self.statusBar().showMessage(m)
+                    wait_label.setText(f"\u2b07  {m}")
+                    QApplication.processEvents()
+
+                success, _ = api.download_idgames_gui(map_data, callback=_update)
+                wait_dlg.close()
                 if success:
                     self.refresh_data()
                     QMessageBox.information(self, "Erfolg", f"'{title}' installiert!")
