@@ -1,4 +1,4 @@
-import sys
+﻿import sys
 import os
 import csv
 import json
@@ -14,11 +14,11 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QPushButton, QWidget, QHeaderView, 
     QLabel, QMenu, QMessageBox, QDialog, QLineEdit, QCheckBox, 
     QGroupBox, QSplitter, QAbstractItemView, QScrollArea, QFrame,
-    QComboBox, QFileDialog, QSizePolicy,
+    QComboBox, QFileDialog, QSizePolicy, QTextEdit,
     QInputDialog, QStyledItemDelegate, QStyle
 )
-from PySide6.QtCore import Qt, Signal, QRect, QSize, QTimer, QPoint
-from PySide6.QtGui import QAction, QIcon, QColor, QFont, QPainter, QBrush, QFontMetrics, QLinearGradient, QPolygon
+from PySide6.QtCore import Qt, Signal, QRect, QSize, QTimer, QPoint, QUrl
+from PySide6.QtGui import QAction, QIcon, QColor, QFont, QPainter, QBrush, QFontMetrics, QLinearGradient, QPolygon, QDesktopServices
 
 # ============================================================================
 # CORE-MODULE IMPORTIEREN
@@ -55,6 +55,9 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
     logging.error(f"UNBEHANDELTER ABSTURZ:\n{tb_text}")
     print(f"[CRASH] Ein fataler Fehler ist aufgetreten. Siehe dms_error.log")
 
+    # Startfehler marker setzen, damit beim naechsten Start ein Rollback angeboten wird.
+    updater.mark_start_failure(tb_text)
+
     # 3. Dem User ein schickes GUI-Fenster zeigen (falls die GUI schon läuft)
     app = QApplication.instance()
     if app:
@@ -65,6 +68,21 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
         msg.setInformativeText("Ein Bericht wurde in der 'dms_error.log' gespeichert.")
         msg.setDetailedText(tb_text) # Fügt den "Details..." Button hinzu
         msg.exec()
+
+        backups = updater.get_update_backups()
+        if backups:
+            rb = QMessageBox.question(
+                None,
+                "Rollback anbieten",
+                "Es wurde mindestens ein Update-Backup gefunden.\nSoll das neueste Backup jetzt wiederhergestellt werden?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if rb == QMessageBox.Yes:
+                if updater.restore_latest_update_backup():
+                    QMessageBox.information(None, "Rollback", "Backup wurde wiederhergestellt. Bitte den Launcher neu starten.")
+                else:
+                    QMessageBox.warning(None, "Rollback", "Backup konnte nicht wiederhergestellt werden.")
 
     # 4. Das Programm sicher beenden
     sys.exit(1)
@@ -2365,14 +2383,63 @@ class DoomManagerGUI(QMainWindow):
     def check_updates(self):
         """Prüft im Hintergrund auf Launcher-Updates."""
         update_info = updater.check_launcher_update()
+        if update_info.get("error"):
+            self.statusBar().showMessage(f"Update-Check Fehler: {update_info.get('error')}", 7000)
+            return
+
         if update_info.get("update_available"):
-            reply = QMessageBox.question(self, "Update Verfügbar", 
-                                        f"Version {update_info['remote_version']} ist verfügbar.\nMöchtest du jetzt updaten?",
-                                        QMessageBox.Yes | QMessageBox.No)
-            if reply == QMessageBox.Yes:
-                if updater.apply_launcher_update(update_info['remote_version'], update_info['remote_code']):
+            dlg = QDialog(self)
+            dlg.setWindowTitle("Update verfügbar")
+            dlg.setModal(True)
+            dlg.resize(760, 560)
+
+            layout = QVBoxLayout(dlg)
+            headline = QLabel(
+                f"Version {update_info['remote_version']} ist verfügbar.\n"
+                "Bitte lies zuerst das Changelog und entscheide danach, ob du updaten möchtest."
+            )
+            headline.setWordWrap(True)
+            layout.addWidget(headline)
+
+            changelog = QTextEdit()
+            changelog.setReadOnly(True)
+            changelog_text = str(update_info.get("changelog_text") or "").strip()
+            if changelog_text:
+                changelog.setPlainText(changelog_text)
+            else:
+                changelog.setPlainText("Kein Changelog geladen. Du kannst trotzdem updaten.")
+            layout.addWidget(changelog)
+
+            btn_row = QHBoxLayout()
+            btn_open = QPushButton("Changelog im Browser")
+            btn_no = QPushButton("Später")
+            btn_yes = QPushButton("Jetzt updaten")
+
+            changelog_url = str(update_info.get("changelog_url") or "").strip()
+            btn_open.setEnabled(bool(changelog_url))
+            if changelog_url:
+                btn_open.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(changelog_url)))
+
+            btn_no.clicked.connect(dlg.reject)
+            btn_yes.clicked.connect(dlg.accept)
+
+            btn_row.addWidget(btn_open)
+            btn_row.addStretch()
+            btn_row.addWidget(btn_no)
+            btn_row.addWidget(btn_yes)
+            layout.addLayout(btn_row)
+
+            if dlg.exec() == QDialog.Accepted:
+                mode = str(update_info.get("update_mode") or "script")
+                if mode == "package":
+                    ok = updater.apply_launcher_package_update(update_info)
+                else:
+                    ok = updater.apply_launcher_update(update_info['remote_version'], update_info['remote_code'])
+
+                if ok:
                     QMessageBox.information(self, "Update", "Update erfolgreich! Der Launcher wird nun beendet. Bitte starte ihn neu.")
                     sys.exit(0)
+                QMessageBox.warning(self, "Update", "Update konnte nicht angewendet werden. Prüfe Logs und nutze bei Bedarf Rollback.")
 
     # --- MENÜS & DIALOGE ---
 
@@ -2570,7 +2637,33 @@ if __name__ == "__main__":
     palette.setColor(palette.ColorRole.HighlightedText, Qt.GlobalColor.black)
     app.setPalette(palette)
 
+    fail_info = updater.get_start_failure_info()
+    if fail_info:
+        backups = updater.get_update_backups()
+        if backups:
+            preview = str(fail_info.get("details", "") or "").strip()
+            preview = preview[:700]
+            txt = (
+                "Beim letzten Start wurde ein Fehler erkannt.\n"
+                "Möchtest du das neueste Update-Backup wiederherstellen?"
+            )
+            msg = QMessageBox()
+            msg.setIcon(QMessageBox.Warning)
+            msg.setWindowTitle("Startproblem erkannt")
+            msg.setText(txt)
+            if preview:
+                msg.setDetailedText(preview)
+            msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+            msg.setDefaultButton(QMessageBox.Yes)
+            if msg.exec() == QMessageBox.Yes:
+                if updater.restore_latest_update_backup():
+                    QMessageBox.information(None, "Rollback", "Backup erfolgreich wiederhergestellt. Bitte Launcher neu starten.")
+                    sys.exit(0)
+                QMessageBox.warning(None, "Rollback", "Backup konnte nicht wiederhergestellt werden.")
+        updater.clear_start_failure_marker()
+
     # 3. Fenster laden
     window = DoomManagerGUI()
     window.show()
+    updater.clear_start_failure_marker()
     sys.exit(app.exec())

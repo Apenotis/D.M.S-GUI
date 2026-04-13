@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.2.2] - 2026-04-13
+
+### Added
+- ZIP-based launcher updates now restore the tested project package instead of only replacing a single file.
+- Added a standalone recovery launcher and startup chain via `start.bat`.
+- Automatic rollback prompt now appears after detected startup failures when backups are available.
+
+### Fixed
+- Package updates now include `start.bat` and `recovery_launcher.py` so the recovery path is updated together with the launcher.
+- Rollback flow was live-tested with an intentionally broken launcher start and validated against the generated backup ZIP.
+
 ## [3.2.1] - 2026-04-13
 
 ### Fixed

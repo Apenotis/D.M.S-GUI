@@ -1,11 +1,11 @@
-import configparser
+﻿import configparser
 import os
 import sys
 
 # ============================================================================
 # PFADE & KONSTANTEN
 # ============================================================================
-APP_VERSION = "3.2.1"
+APP_VERSION = "3.2.2"
 
 
 def _resolve_base_dir() -> str:

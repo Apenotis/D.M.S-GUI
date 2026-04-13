@@ -28,6 +28,9 @@ maps.db
 maps.csv
 *.bak
 *.broken
+*.bak_v*
+update_backups/
+update_start_fail.json
 
 # Generated snapshots and local test clones
 _test_snapshots/
