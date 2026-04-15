@@ -17,12 +17,22 @@ import dms_core.initialization as init
 
 # Starter map entries that should be auto-created after importing an IWAD.
 _STARTER_MAPS = {
-    "doom.wad":     {"ID": "DOOM1",   "Name": "Ultimate Doom",                           "IWAD": "doom.wad"},
-    "doom2.wad":    {"ID": "DOOM2",   "Name": "Doom II: Hell on Earth",                  "IWAD": "doom2.wad"},
-    "heretic.wad":  {"ID": "HERETIC", "Name": "Heretic: Shadow of the Serpent Riders",   "IWAD": "heretic.wad"},
-    "hexen.wad":    {"ID": "HEXEN",   "Name": "Hexen: Beyond Heretic",                   "IWAD": "hexen.wad"},
-    "plutonia.wad": {"ID": "DOOM3",   "Name": "Final Doom: The Plutonia Experiment",     "IWAD": "plutonia.wad"},
-    "tnt.wad":      {"ID": "DOOM4",   "Name": "Final Doom: TNT:Evilution",               "IWAD": "tnt.wad"},
+    "doom.wad":         {"ID": "DOOM1",   "Name": "Ultimate Doom",                           "IWAD": "doom.wad",    "Kat": "IWAD"},
+    "doom2.wad":        {"ID": "DOOM2",   "Name": "Doom II: Hell on Earth",                  "IWAD": "doom2.wad",   "Kat": "IWAD"},
+    "plutonia.wad":     {"ID": "DOOM3",   "Name": "Final Doom: The Plutonia Experiment",     "IWAD": "plutonia.wad", "Kat": "IWAD"},
+    "tnt.wad":          {"ID": "DOOM4",   "Name": "Final Doom: TNT:Evilution",               "IWAD": "tnt.wad",     "Kat": "IWAD"},
+    "heretic.wad":      {"ID": "HERETIC", "Name": "Heretic: Shadow of the Serpent Riders",   "IWAD": "heretic.wad", "Kat": "IWAD"},
+    "hexen.wad":        {"ID": "HEXEN",   "Name": "Hexen: Beyond Heretic",                   "IWAD": "hexen.wad",   "Kat": "IWAD"},
+    "hexdd.wad":        {"ID": "HEXEN1",  "Name": "Hexen: Deathkings of the Dark Citadel",   "IWAD": "hexen.wad",   "Kat": "EXTRA"},
+    "hexdd_ex.wad":     {"ID": "HEXEN1",  "Name": "Hexen: Deathkings of the Dark Citadel",   "IWAD": "hexen.wad",   "Kat": "EXTRA"},
+    "hexen_ex.wad":     {"ID": "HEXEN2",  "Name": "Hexen: Beyond Heretic (EX)",              "IWAD": "hexen.wad",   "Kat": "EXTRA"},
+    "hexen_vog.wad":    {"ID": "HEXEN3",  "Name": "Hexen: Beyond Heretic (VOG)",             "IWAD": "hexen.wad",   "Kat": "EXTRA"},
+    "masterlevels.wad": {"ID": "DOOM8",   "Name": "Doom II: Masterlevels",                    "IWAD": "doom2.wad",   "Kat": "IWAD"},
+    "nerve.wad":        {"ID": "DOOM9",   "Name": "Doom II: No Rest for the Living",          "IWAD": "doom2.wad",   "Kat": "IWAD"},
+    "id1.wad":          {"ID": "DOOM7",   "Name": "Doom II: Legacy of Rust",                  "IWAD": "doom2.wad",   "Kat": "IWAD"},
+    "sigil.wad":        {"ID": "DOOM11",  "Name": "Sigil",                                    "IWAD": "doom.wad",    "Kat": "IWAD"},
+    "sigil2.wad":       {"ID": "DOOM12",  "Name": "Sigil 2",                                  "IWAD": "doom.wad",    "Kat": "IWAD"},
+    "extras.wad":       {"ID": "DOOM14",  "Name": "DOOM + DOOM II: Extras",                   "IWAD": "doom2.wad",   "Kat": "IWAD"},
 }
 
 
@@ -381,7 +391,7 @@ class SetupWizard(QDialog):
                         "Path": "-",
                         "MOD": "0",
                         "ARGS": "0",
-                        "Kategorie": "IWAD",
+                        "Kategorie": meta.get("Kat", "IWAD"),
                         "Playtime": "0",
                         "LastPlayed": "-",
                         "RemoteID": "0",

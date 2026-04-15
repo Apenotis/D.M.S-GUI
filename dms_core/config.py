@@ -5,7 +5,7 @@ import sys
 # ============================================================================
 # Paths and constants
 # ============================================================================
-APP_VERSION = "3.2.3"
+APP_VERSION = "3.2.4"
 
 
 def _resolve_base_dir() -> str:
@@ -16,7 +16,16 @@ def _resolve_base_dir() -> str:
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _resolve_assets_dir() -> str:
+    """Resolve the assets directory (bundled via --add-data into _MEIPASS)."""
+    if getattr(sys, "frozen", False):
+        # PyInstaller 6+: --add-data files land in sys._MEIPASS, not next to the EXE.
+        return os.path.join(sys._MEIPASS, "assets")
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets")
+
+
 BASE_DIR = _resolve_base_dir()
+ASSETS_DIR = _resolve_assets_dir()
 CONFIG_FILE = os.path.join(BASE_DIR, "config.ini")
 IWAD_DIR = os.path.join(BASE_DIR, "iwad")
 PWAD_DIR = os.path.join(BASE_DIR, "pwad")

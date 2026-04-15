@@ -2170,12 +2170,14 @@ class DoomManagerGUI(QMainWindow):
                 if blocks[5]:
                     blocks[5].append([])
                 blocks[5].extend(extra_misc_maps)
-            # Distribute DOOM maps across columns 1 to 4.
-            per_col = (len(doom_maps) + 3) // 4
-            blocks[1] = doom_maps[:per_col]
-            blocks[2] = doom_maps[per_col:per_col * 2]
-            blocks[3] = doom_maps[per_col * 2:per_col * 3]
-            blocks[4] = doom_maps[per_col * 3:]
+            # Distribute DOOM maps across columns 1 to 4 as evenly as possible.
+            n = len(doom_maps)
+            q, r = divmod(n, 4)
+            idx = 0
+            for col in range(1, 5):
+                size = q + (1 if col <= r else 0)
+                blocks[col] = doom_maps[idx:idx + size]
+                idx += size
 
             # Determine row count.
             max_rows = max(len(blocks[1]), len(blocks[2]), len(blocks[3]), len(blocks[4]), len(blocks[5]))
@@ -2362,6 +2364,7 @@ class DoomManagerGUI(QMainWindow):
         count = installer.install_from_folder(
             callback=lambda m: self.statusBar().showMessage(m),
             resolve_game=self.prompt_install_game_profile,
+            resolve_duplicate=self.prompt_resolve_duplicate,
         )
 
         if count > 0:
@@ -2375,6 +2378,27 @@ class DoomManagerGUI(QMainWindow):
             self.statusBar().showMessage("No new files were found in the 'Install' folder.", 6000)
 
         return count
+
+    def prompt_resolve_duplicate(self, name, existing_entry):
+        """Ask the user what to do when a duplicate map is detected during import."""
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Duplicate Found")
+        msg.setText(
+            f"<b>'{name}'</b> is already in your library.\n\n"
+            "What do you want to do?"
+        )
+        msg.setIcon(QMessageBox.Warning)
+        btn_skip      = msg.addButton("Skip",      QMessageBox.NoRole)
+        btn_overwrite = msg.addButton("Overwrite", QMessageBox.YesRole)
+        btn_cancel    = msg.addButton("Cancel All", QMessageBox.RejectRole)
+        msg.setDefaultButton(btn_skip)
+        msg.exec()
+        clicked = msg.clickedButton()
+        if clicked is btn_overwrite:
+            return "overwrite"
+        if clicked is btn_cancel:
+            return "cancel"
+        return "skip"  # default
 
     def prompt_install_game_profile(self, file_path):
         """Fallback dialog: ask for the base game when no TXT IWAD info is found."""
@@ -2766,9 +2790,9 @@ if __name__ == "__main__":
 
     # 2. Start the GUI.
     app = QApplication(sys.argv)
-    icon_path = os.path.join(cfg.BASE_DIR, "assets", "dms_icon.ico")
+    icon_path = os.path.join(cfg.ASSETS_DIR, "dms_icon.ico")
     if not os.path.exists(icon_path):
-        icon_path = os.path.join(cfg.BASE_DIR, "assets", "dms_icon.png")
+        icon_path = os.path.join(cfg.ASSETS_DIR, "dms_icon.png")
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))
     

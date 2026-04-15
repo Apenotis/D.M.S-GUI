@@ -1,5 +1,19 @@
 # Changelog
 
+## [3.2.4] - 2026-04-15
+
+### Added
+- Added duplicate detection during Install folder imports for both IWAD and PWAD entries with user choice (Skip / Overwrite / Cancel All).
+- Added release-gate tests for 4-column DOOM map distribution to catch empty-column regressions before release.
+
+### Fixed
+- Fixed 4-column DOOM map list distribution so all columns are used as evenly as possible.
+- Fixed bundled icon loading in frozen builds by resolving assets from the PyInstaller runtime path.
+- Extended official IWAD recognition and DB insertion for additional original files (including TNT/Plutonia extras and Hexen variants) during import/setup.
+
+### Changed
+- Release pipeline now runs pytest as part of validation before packaging.
+
 ## [3.2.3] - 2026-04-15
 
 ### Added

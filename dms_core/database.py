@@ -330,6 +330,25 @@ def delete_map(map_id):
             conn.close()
     return False
 
+def find_duplicates(iwad_filename, path):
+    """Return existing DB rows that match the same IWAD entry or PWAD path.
+
+    For official IWADs (path == '-') the lookup is done by IWAD filename.
+    For PWADs the lookup is done by folder path.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        if path and path != "-":
+            cursor.execute("SELECT * FROM maps WHERE Path = ?", (path,))
+        else:
+            cursor.execute("SELECT * FROM maps WHERE IWAD = ? AND Path = '-'", (iwad_filename,))
+        rows = cursor.fetchall()
+        return [dict(zip(HEADER, r)) for r in rows]
+    finally:
+        conn.close()
+
+
 def insert_map(map_data):
     """Insert a new map into the database."""
     conn = get_db_connection()

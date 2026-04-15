@@ -18,11 +18,15 @@ OFFICIAL_MAPPING = {
     "heretic.wad":      {"Name": "Heretic: Shadow of the Serpent Riders", "IWAD": "heretic.wad", "Kat": "EXTRA", "Type": "HERETIC"},
     "hexen.wad":        {"Name": "Hexen: Beyond Heretic", "IWAD": "hexen.wad", "Kat": "EXTRA", "Type": "HEXEN"},
     "hexdd.wad":        {"Name": "Hexen: Deathkings of the Dark Citadel", "IWAD": "hexen.wad", "Kat": "EXTRA", "Type": "HEXEN"},
+    "hexdd_ex.wad":     {"Name": "Hexen: Deathkings of the Dark Citadel", "IWAD": "hexen.wad", "Kat": "EXTRA", "Type": "HEXEN"},
+    "hexen_ex.wad":     {"Name": "Hexen: Beyond Heretic (EX)", "IWAD": "hexen.wad", "Kat": "EXTRA", "Type": "HEXEN"},
+    "hexen_vog.wad":    {"Name": "Hexen: Beyond Heretic (VOG)", "IWAD": "hexen.wad", "Kat": "EXTRA", "Type": "HEXEN"},
     "sigil.wad":        {"Name": "Sigil", "IWAD": "doom.wad", "Kat": "IWAD", "Type": "DOOM"},
     "sigil2.wad":       {"Name": "Sigil 2", "IWAD": "doom.wad", "Kat": "IWAD", "Type": "DOOM"},
     "masterlevels.wad": {"Name": "Doom II: Masterlevels", "IWAD": "doom2.wad", "Kat": "IWAD", "Type": "DOOM"},
     "nerve.wad":        {"Name": "Doom II: No Rest for the Living", "IWAD": "doom2.wad", "Kat": "IWAD", "Type": "DOOM"},
     "id1.wad":          {"Name": "Doom II: Legacy of Rust", "IWAD": "doom2.wad", "Kat": "IWAD", "Type": "DOOM"},
+    "extras.wad":       {"Name": "DOOM + DOOM II: Extras", "IWAD": "doom2.wad", "Kat": "IWAD", "Type": "DOOM"},
 }
 
 GAME_PROFILE_MAPPING = {
@@ -92,8 +96,11 @@ def _detect_game_from_txt(target_dir):
         return None
 
 @tracker
-def install_custom(file_path, callback=None, resolve_game=None):
-    """Install files and sort official content into IWAD, everything else into PWAD."""
+def install_custom(file_path, callback=None, resolve_game=None, resolve_duplicate=None):
+    """Install files and sort official content into IWAD, everything else into PWAD.
+
+    resolve_duplicate(name, existing_entry) -> 'overwrite' | 'skip' | 'cancel'
+    """
     def log(msg):
         if callback: callback(msg)
         else: print(f"[INSTALLER] {msg}")
@@ -112,9 +119,23 @@ def install_custom(file_path, callback=None, resolve_game=None):
             
             # Target: copy directly into the IWAD directory.
             target_dir = cfg.IWAD_DIR
-            folder_name = "-" 
+            folder_name = "-"
             dest_path = os.path.join(target_dir, fname)
-            
+
+            # Duplicate check for IWAD entries.
+            existing = db.find_duplicates(fname, "-")
+            if existing:
+                action = resolve_duplicate(existing[0]["Name"], existing[0]) if callable(resolve_duplicate) else "skip"
+                if action == "cancel":
+                    return "cancel"
+                if action == "skip":
+                    log(f"> Skipping '{title}' – already in library.")
+                    return "skip"
+                # overwrite: remove old DB entries (file will be copied over).
+                for e in existing:
+                    db.delete_map(e["ID"])
+                log(f"> Overwriting '{title}'...")
+
             log(f"> Moving IWAD/add-on '{title}' into the IWAD directory...")
             shutil.copy2(file_path, dest_path)
             
@@ -123,10 +144,25 @@ def install_custom(file_path, callback=None, resolve_game=None):
             title = base_name.replace("_", " ")
             folder_name = base_name
             target_dir = os.path.join(cfg.PWAD_DIR, folder_name)
+
+            # Duplicate check for PWAD entries.
+            existing = db.find_duplicates(None, folder_name)
+            if existing:
+                action = resolve_duplicate(existing[0]["Name"], existing[0]) if callable(resolve_duplicate) else "skip"
+                if action == "cancel":
+                    return "cancel"
+                if action == "skip":
+                    log(f"> Skipping '{title}' – already in library.")
+                    return "skip"
+                # overwrite: remove old DB entries (folder will be overwritten).
+                for e in existing:
+                    db.delete_map(e["ID"])
+                log(f"> Overwriting '{title}'...")
+
             os.makedirs(target_dir, exist_ok=True)
-            
+
             iwad, prefix, kat = "doom2.wad", "DOOM", "PWAD"
-            
+
             log(f"> Installing PWAD '{title}' into the PWAD directory...")
             
             if file_path.lower().endswith(".zip"):
@@ -185,19 +221,33 @@ def install_custom(file_path, callback=None, resolve_game=None):
         log(f"Error while processing {file_path}: {e}")
         return False
 
-def install_from_folder(callback=None, resolve_game=None):
+def install_from_folder(callback=None, resolve_game=None, resolve_duplicate=None):
     """Scan the Install folder and clean it up afterwards."""
     install_dir = os.path.join(cfg.BASE_DIR, "Install")
     files = get_install_candidates(install_dir)
     count = 0
-    
+
     for full_path in files:
-        if install_custom(full_path, callback, resolve_game=resolve_game):
+        result = install_custom(
+            full_path,
+            callback,
+            resolve_game=resolve_game,
+            resolve_duplicate=resolve_duplicate,
+        )
+        if result is True:
             count += 1
             try:
                 os.remove(full_path)
-            except:
+            except Exception:
                 pass
+        elif result == "skip":
+            # Duplicate skipped by user – remove from Install/ so it won't appear again.
+            try:
+                os.remove(full_path)
+            except Exception:
+                pass
+        elif result == "cancel":
+            break  # Stop processing further files.
 
     if count > 0:
         db.repair_map_indices()
