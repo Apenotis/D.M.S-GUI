@@ -7,18 +7,18 @@ from datetime import datetime
 import dms_core.config as cfg
 from dms_core.utils import tracker
 
-# Die finale Matrix mit 13 Spalten (Favorit ist die letzte)
+# Final 13-column schema (Favorite is the last column)
 HEADER = [
     "Cleared", "NoMods", "ID", "Name", "IWAD", "Path", 
     "MOD", "ARGS", "Kategorie", "Playtime", "LastPlayed", "RemoteID", "Favorite"
 ]
 
 def get_db_connection():
-    """Erstellt eine Verbindung zur SQLite-Datenbank."""
+    """Create a connection to the SQLite database."""
     return sqlite3.connect(cfg.DB_FILE)
 
 def create_table_if_not_exists():
-    """Erstellt die Tabelle, falls sie nicht existiert."""
+    """Create the table if it does not exist yet."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
@@ -42,7 +42,7 @@ def create_table_if_not_exists():
     conn.close()
 
 def migrate_from_csv():
-    """Migriert Daten von CSV zu SQLite, falls CSV existiert und DB leer ist."""
+    """Migrate data from CSV to SQLite if the CSV exists and the DB is empty."""
     if not os.path.exists(cfg.CSV_FILE):
         return
     
@@ -51,12 +51,12 @@ def migrate_from_csv():
     cursor.execute("SELECT COUNT(*) FROM maps")
     if cursor.fetchone()[0] > 0:
         conn.close()
-        return  # DB bereits gefüllt
+        return  # DB already populated
     
     try:
         with open(cfg.CSV_FILE, "r", encoding="utf-8-sig") as f:
             reader = csv.DictReader(f, fieldnames=HEADER, delimiter=";")
-            next(reader, None)  # Header überspringen
+            next(reader, None)  # Skip header
             for row in reader:
                 if "RemoteID" not in row or row["RemoteID"] is None:
                     row["RemoteID"] = "0"
@@ -82,22 +82,22 @@ def migrate_from_csv():
                     row.get("Favorite", "0")
                 ))
         conn.commit()
-        print("✅ Migration von CSV zu SQLite abgeschlossen.")
+        print("CSV to SQLite migration completed.")
     except Exception as e:
-        print(f"❌ Fehler bei Migration: {e}")
+        print(f"Migration error: {e}")
     finally:
         conn.close()
 
-# Initialisierung
+# Initialization
 create_table_if_not_exists()
 migrate_from_csv()
 
 @tracker
 def get_all_maps():
-    """Liest alle Maps aus der SQLite-Datenbank."""
+    """Read all maps from the SQLite database."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    # Einfuegereihenfolge beibehalten: neue Karten erscheinen am Listenende.
+    # Preserve insertion order so new maps appear at the end.
     cursor.execute("SELECT * FROM maps ORDER BY ROWID ASC")
     rows = cursor.fetchall()
     conn.close()
@@ -108,7 +108,7 @@ def get_all_maps():
     return maps
 
 def get_map_by_id(map_id):
-    """Sucht eine Karte anhand ihrer ID."""
+    """Look up a map by its ID."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM maps WHERE ID = ? LIMIT 1", (str(map_id).strip().upper(),))
@@ -121,7 +121,7 @@ def get_map_by_id(map_id):
 
 @tracker
 def save_all_maps(maps):
-    """Speichert die Liste der Maps in die Datenbank (ersetzt alle)."""
+    """Save the full map list to the database, replacing existing rows."""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -149,18 +149,18 @@ def save_all_maps(maps):
         conn.commit()
         return True
     except Exception as e:
-        print(f"❌ DB Speicher-Fehler: {e}")
+        print(f"DB save error: {e}")
         conn.rollback()
         return False
     finally:
         conn.close()
 
 # ============================================================================
-# STATUS-FUNKTIONEN (FIX FÜR RECHTSKLICK-MENÜ)
+# Status functions
 # ============================================================================
 
 def toggle_map_clear(map_id):
-    """Schaltet den 'Cleared' Status um."""
+    """Toggle the Cleared status."""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -168,14 +168,14 @@ def toggle_map_clear(map_id):
         conn.commit()
         return True
     except Exception as e:
-        print(f"❌ Fehler beim Umschalten Cleared: {e}")
+        print(f"Error toggling Cleared: {e}")
         conn.rollback()
         return False
     finally:
         conn.close()
 
 def toggle_mod_skip(map_id):
-    """Schaltet den 'NoMods' Status um."""
+    """Toggle the NoMods status."""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -183,14 +183,14 @@ def toggle_mod_skip(map_id):
         conn.commit()
         return True
     except Exception as e:
-        print(f"❌ Fehler beim Umschalten NoMods: {e}")
+        print(f"Error toggling NoMods: {e}")
         conn.rollback()
         return False
     finally:
         conn.close()
 
 def toggle_favorite(map_id):
-    """Schaltet den Favoriten-Status um."""
+    """Toggle favorite status."""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -198,7 +198,7 @@ def toggle_favorite(map_id):
         conn.commit()
         return True
     except Exception as e:
-        print(f"❌ Fehler beim Umschalten Favorite: {e}")
+        print(f"Error toggling Favorite: {e}")
         conn.rollback()
         return False
     finally:
@@ -206,7 +206,7 @@ def toggle_favorite(map_id):
 
 
 def update_map_name(map_id, new_name):
-    """Aktualisiert den Namen einer Map."""
+    """Update a map name."""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -219,7 +219,7 @@ def update_map_name(map_id, new_name):
         conn.commit()
         return cursor.rowcount > 0
     except Exception as e:
-        print(f"❌ Fehler beim Umbenennen: {e}")
+        print(f"Rename error: {e}")
         conn.rollback()
         return False
     finally:
@@ -227,7 +227,7 @@ def update_map_name(map_id, new_name):
 
 
 def update_map_args(map_id, new_args):
-    """Aktualisiert die Startparameter (ARGS) einer Map."""
+    """Update a map's launch arguments (ARGS)."""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -236,7 +236,7 @@ def update_map_args(map_id, new_args):
         if not clean_id:
             return False
 
-        # Leere Eingabe als '0' speichern (entspricht: keine Zusatzparameter)
+        # Store empty input as '0' to represent no extra arguments.
         if clean_args == "":
             clean_args = "0"
 
@@ -244,39 +244,39 @@ def update_map_args(map_id, new_args):
         conn.commit()
         return cursor.rowcount > 0
     except Exception as e:
-        print(f"❌ Fehler beim ARGS-Update: {e}")
+        print(f"ARGS update error: {e}")
         conn.rollback()
         return False
     finally:
         conn.close()
 
 # ============================================================================
-# SPIELZEIT & STATISTIK
+# Playtime and stats
 # ============================================================================
 
 def get_total_seconds():
-    """Liest die Gesamtspielzeit aus der config.ini (Sektion [STATS])."""
+    """Read total playtime from config.ini ([STATS])."""
     try:
         return int(cfg.config.get("STATS", "totaltime", fallback="0"))
     except Exception as e:
-        print(f"⚠️ Fehler beim Lesen der Spielzeit aus INI: {e}")
+        print(f"Warning reading playtime from INI: {e}")
         return 0
 
 def save_total_seconds(seconds):
-    """Speichert die Spielzeit in die config.ini."""
+    """Save playtime to config.ini."""
     try:
         cfg.set_stat("TotalTime", int(seconds))
         return True
     except Exception as e:
-        print(f"❌ Fehler beim Speichern der Spielzeit: {e}")
+        print(f"Error saving playtime: {e}")
         return False
 
 # ============================================================================
-# ADMIN & REPARATUR
+# Admin and repair
 # ============================================================================
 
 def get_next_id(prefix="DOOM"):
-    """Generiert die nächste freie ID."""
+    """Generate the next free ID."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT ID FROM maps WHERE ID LIKE ?", (f"{prefix}%",))
@@ -296,12 +296,12 @@ def get_next_id(prefix="DOOM"):
 
 @tracker
 def repair_map_indices():
-    """Sortiert die Datenbank sauber nach IDs (nicht nötig in SQLite, aber behalten für Kompatibilität)."""
-    # In SQLite ist die Reihenfolge durch ORDER BY garantiert
+    """Compatibility stub for index repair after the SQLite migration."""
+    # SQLite ordering is controlled via ORDER BY.
     return True
 
 def delete_map(map_id):
-    """Löscht eine Map aus der Datenbank und von der Festplatte."""
+    """Delete a map from the database and disk."""
     map_data = get_map_by_id(map_id)
     if map_data:
         map_path = str(map_data.get("Path", "")).strip()
@@ -323,7 +323,7 @@ def delete_map(map_id):
             conn.commit()
             return True
         except Exception as e:
-            print(f"❌ Fehler beim Löschen: {e}")
+            print(f"Delete error: {e}")
             conn.rollback()
             return False
         finally:
@@ -331,7 +331,7 @@ def delete_map(map_id):
     return False
 
 def insert_map(map_data):
-    """Fügt eine neue Map in die Datenbank ein."""
+    """Insert a new map into the database."""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -357,7 +357,7 @@ def insert_map(map_data):
         conn.commit()
         return True
     except Exception as e:
-        print(f"❌ Fehler beim Einfügen: {e}")
+        print(f"Insert error: {e}")
         conn.rollback()
         return False
     finally:
@@ -365,5 +365,5 @@ def insert_map(map_data):
 
 
 def uninstall_map(map_id):
-    """Kompatibilitaets-Alias fuer bestehende GUI-Aufrufe."""
+    """Compatibility alias for existing GUI calls."""
     return delete_map(map_id)

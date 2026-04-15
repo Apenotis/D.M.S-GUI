@@ -1,5 +1,6 @@
 ﻿import sys
 import os
+import ctypes
 import csv
 import json
 import random
@@ -8,7 +9,7 @@ import traceback
 import configparser
 from datetime import datetime, timedelta
 
-# Nur die Widgets, die wirklich im Code vorkommen
+# Qt widgets in use
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTableWidget, QTableWidgetItem, 
     QVBoxLayout, QHBoxLayout, QPushButton, QWidget, QHeaderView, 
@@ -21,7 +22,7 @@ from PySide6.QtCore import Qt, Signal, QRect, QSize, QTimer, QPoint, QUrl
 from PySide6.QtGui import QAction, QIcon, QColor, QFont, QPainter, QBrush, QFontMetrics, QLinearGradient, QPolygon, QDesktopServices
 
 # ============================================================================
-# CORE-MODULE IMPORTIEREN
+# Core-Module
 # ============================================================================
 import dms_core.config as cfg
 import dms_core.database as db
@@ -35,68 +36,68 @@ import dms_core.initialization as init
 from dms_core.utils import tracker
 from dms_core.setup_wizard import SetupWizard, should_run_wizard
 
-# Error Logging Setup (Geräuschlos im Hintergrund)
+# Error logging
 logging.basicConfig(filename=os.path.join(cfg.BASE_DIR, 'dms_error.log'), level=logging.ERROR, 
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
 # ============================================================================
-# GLOBALER FANGZAUN (CRASH HANDLER)
+# Global crash handler
 # ============================================================================
 def global_exception_handler(exc_type, exc_value, exc_traceback):
     """
-    Fängt alle unbehandelten Fehler im gesamten Programm ab, 
-    speichert sie im Log und zeigt eine Warnung in der GUI.
+    Catch all unhandled errors across the entire program,
+    store them in the log, and show a warning in the GUI.
     """
-    # 1. Den genauen Fehlertext (Traceback) zusammenbauen
+    # Build traceback text.
     tb_lines = traceback.format_exception(exc_type, exc_value, exc_traceback)
     tb_text = "".join(tb_lines)
 
-    # 2. Unsichtbar in die dms_error.log schreiben
-    logging.error(f"UNBEHANDELTER ABSTURZ:\n{tb_text}")
-    print(f"[CRASH] Ein fataler Fehler ist aufgetreten. Siehe dms_error.log")
+    # Log the error.
+    logging.error(f"UNHANDLED CRASH:\n{tb_text}")
+    print("[CRASH] A fatal error occurred. See dms_error.log")
 
-    # Startfehler marker setzen, damit beim naechsten Start ein Rollback angeboten wird.
+    # Mark startup failures so rollback can be offered.
     updater.mark_start_failure(tb_text)
 
-    # 3. Dem User ein schickes GUI-Fenster zeigen (falls die GUI schon läuft)
+    # Show the error in the GUI.
     app = QApplication.instance()
     if app:
         msg = QMessageBox()
         msg.setIcon(QMessageBox.Critical)
-        msg.setWindowTitle("Kritischer Systemfehler")
-        msg.setText("Ein unerwarteter Fehler ist aufgetreten!\nDas Programm muss leider beendet werden.")
-        msg.setInformativeText("Ein Bericht wurde in der 'dms_error.log' gespeichert.")
-        msg.setDetailedText(tb_text) # Fügt den "Details..." Button hinzu
+        msg.setWindowTitle("Critical System Error")
+        msg.setText("An unexpected error occurred.\nThe program has to close.")
+        msg.setInformativeText("A report was saved to 'dms_error.log'.")
+        msg.setDetailedText(tb_text)
         msg.exec()
 
         backups = updater.get_update_backups()
         if backups:
             rb = QMessageBox.question(
                 None,
-                "Rollback anbieten",
-                "Es wurde mindestens ein Update-Backup gefunden.\nSoll das neueste Backup jetzt wiederhergestellt werden?",
+                "Offer Rollback",
+                "At least one update backup was found.\nDo you want to restore the latest backup now?",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.Yes,
             )
             if rb == QMessageBox.Yes:
                 if updater.restore_latest_update_backup():
-                    QMessageBox.information(None, "Rollback", "Backup wurde wiederhergestellt. Bitte den Launcher neu starten.")
+                    QMessageBox.information(None, "Rollback", "Backup restored. Please restart the launcher.")
                 else:
-                    QMessageBox.warning(None, "Rollback", "Backup konnte nicht wiederhergestellt werden.")
+                    QMessageBox.warning(None, "Rollback", "Backup could not be restored.")
 
-    # 4. Das Programm sicher beenden
+    # Exit the process.
     sys.exit(1)
 
-# Den globalen Fangzaun im System aktivieren!
+# Enable the global handler.
 sys.excepthook = global_exception_handler
 
 # ============================================================================
-# CUSTOM DELEGATE: FLAT CARDS MIT AKZENTBALKEN
+# Delegate for map display
 # ============================================================================
 class MapItemDelegate(QStyledItemDelegate):
-    """Zeichnet Flat-Cards mit farbigem Akzentbalken und Status-Badges."""
+    """Render flat cards with a colored accent bar and status badges."""
 
-    # Akzentfarben je nach Status / IWAD
+    # Accent colors by status/IWAD
     ACCENT = {
         "favorite": QColor("#FFD700"),
         "cleared":  QColor("#2ecc71"),
@@ -106,7 +107,7 @@ class MapItemDelegate(QStyledItemDelegate):
         "none":     QColor("#3a3a3a"),
     }
 
-    # Badge-Definition: key -> (Hintergrund, Text, Textfarbe)
+    # Badge definition: key -> (background, text, text color)
     BADGES = [
         ("n", QColor("#3498db"), "NEW", QColor("#fff")),
         ("f", QColor("#FFD700"), "★", QColor("#111")),
@@ -126,13 +127,13 @@ class MapItemDelegate(QStyledItemDelegate):
         painter.save()
         rect = option.rect
 
-        # --- Leere / deaktivierte Zellen: nur Hintergrund ---
-        if not is_enabled or flags is None:
+        # Render disabled cells as background only.
+        if not is_enabled or flags is None or not map_id:
             painter.fillRect(rect, QColor("#1e1e1e"))
             painter.restore()
             return
 
-        # --- Hintergrundfarbe: bei Klick nicht extra faerben, nur Hover bleibt etwas heller ---
+        # Background color, slightly brighter on hover.
         if is_hovered:
             bg = QColor("#2a2a2a")
         else:
@@ -140,11 +141,11 @@ class MapItemDelegate(QStyledItemDelegate):
 
         painter.fillRect(rect, bg)
 
-        # --- Subtile Trennlinie unten ---
+        # Bottom separator.
         painter.setPen(QColor("#1a1a1a"))
         painter.drawLine(rect.left(), rect.bottom(), rect.right(), rect.bottom())
 
-        # --- Akzentbalken (3px links) ---
+        # Left accent bar.
         iwad = flags.get("iwad", "")
         if flags.get("f") == "1":
             accent = self.ACCENT["favorite"]
@@ -159,7 +160,7 @@ class MapItemDelegate(QStyledItemDelegate):
 
         bar = QRect(rect.left() + 6, rect.top() + 5, 3, rect.height() - 10)
 
-        # Hover-Effekt: links leichtes Leuchten am Akzentbalken.
+        # Hover glow on the accent bar.
         if is_hovered:
             glow = QRect(bar.left() - 3, bar.top() - 2, bar.width() + 8, bar.height() + 4)
             glow_color = QColor(accent)
@@ -181,14 +182,14 @@ class MapItemDelegate(QStyledItemDelegate):
             )
         )
 
-        # Endfarbe erst nach abgeschlossener Animation dauerhaft halten.
+        # Keep the final color only after the click animation finishes.
         if is_selected and not is_animating_this_item:
             hold_rect = rect.adjusted(1, 1, -1, -1)
             hold_base = QColor(accent)
             hold_base.setAlpha(186)
             painter.fillRect(hold_rect, hold_base)
 
-        # Klick-Animation: Slider-Fill von links nach rechts.
+        # Click animation from left to right.
         if table and map_id and map_id == str(getattr(table, "click_fill_map_id", "") or ""):
             progress = float(getattr(table, "click_fill_progress", 0.0) or 0.0)
             if progress > 0.0:
@@ -201,11 +202,10 @@ class MapItemDelegate(QStyledItemDelegate):
                     bottom = fill_rect.bottom()
                     right_limit = fill_rect.right()
 
-                    # 45°-Frontkante ohne Naht: ein einziges Polygon statt Rechteck + Kopf.
+                    # Leading edge as a seamless polygon.
                     slant = max(6, fill_rect.height() - 1)
 
-                    # Die Front laeuft intern weiter (width + slant), damit die
-                    # Animation erst endet, wenn auch die untere Spitze den Rand erreicht.
+                    # Internal travel path including the slanted edge to the right border.
                     travel = fill_rect.width() + slant
                     front_pos = left + int(travel * p)
 
@@ -225,7 +225,7 @@ class MapItemDelegate(QStyledItemDelegate):
                     painter.setBrush(slider_color)
                     painter.drawPolygon(slider_poly)
 
-        # --- Badges rechts berechnen (erst messen, dann Text zeichnen) ---
+        # Compute badge rectangles.
         badge_font = QFont("Segoe UI", 7, QFont.Bold)
         painter.setFont(badge_font)
         badge_h = 15
@@ -242,7 +242,7 @@ class MapItemDelegate(QStyledItemDelegate):
             badge_rects.append((QRect(badge_x, rect.center().y() - badge_h // 2, badge_w, badge_h), bg_c, txt, fg_c))
             badge_x -= badge_margin
 
-        # --- Name-Text (rechts der Badges aussparen) ---
+        # Reserve text space to the left of the badges.
         text_right = rect.right() - 6 if not badge_rects else min(r.left() for r, *_ in badge_rects) - 6
         text_rect = QRect(rect.left() + 16, rect.top(), text_right - rect.left() - 16, rect.height())
 
@@ -260,7 +260,7 @@ class MapItemDelegate(QStyledItemDelegate):
         name = index.data(Qt.DisplayRole) or ""
         painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, name)
 
-        # --- Badges zeichnen ---
+        # Draw badges.
         for b_rect, bg_c, txt, fg_c in badge_rects:
             painter.setPen(Qt.NoPen)
             painter.setBrush(bg_c)
@@ -276,21 +276,21 @@ class MapItemDelegate(QStyledItemDelegate):
 
 
 # ============================================================================
-# DIALOGE (API, ENGINES, DETAILS)
+# Dialogs
 # ============================================================================
 
 class EngineManagerDialog(QDialog):
-    """Dialog zur Verwaltung und zum Download von Source-Ports."""
+    """Dialog for managing and downloading source ports."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Engine Manager")
         self.resize(500, 400)
         self.layout = QVBoxLayout(self)
         
-        self.info_label = QLabel("Hier kannst du Engines verwalten:")
+        self.info_label = QLabel("Manage your engines here:")
         self.layout.addWidget(self.info_label)
 
-        self.table = QTableWidget(0, 2) # Name und Status
+        self.table = QTableWidget(0, 2)  # Name and status
         self.table.setHorizontalHeaderLabels(["Engine", "Status"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -298,8 +298,8 @@ class EngineManagerDialog(QDialog):
         self.table.setViewportMargins(0, 3, 0, 0)
 
         btn_layout = QHBoxLayout()
-        self.btn_download = QPushButton("Installieren / Update")
-        self.btn_set_active = QPushButton("Als Aktiv setzen")
+        self.btn_download = QPushButton("Install / Update")
+        self.btn_set_active = QPushButton("Set Active")
         btn_layout.addWidget(self.btn_download)
         btn_layout.addWidget(self.btn_set_active)
         self.layout.addLayout(btn_layout)
@@ -310,15 +310,15 @@ class EngineManagerDialog(QDialog):
         self.load_engines()
 
     def get_engine_status(self, engine_name):
-        """Prüft, ob die EXE im Engines-Ordner existiert."""
+        """Check whether the EXE exists in the Engines directory."""
         path = engines.get_engine_path(engine_name)
-        return "BEREIT" if os.path.exists(path) else "-"
+        return "READY" if os.path.exists(path) else "-"
 
     def load_engines(self):
-        """Scannt alle unterstützten Engines und zeigt deren Status."""
+        """Scan all supported engines and show their status."""
         self.table.setRowCount(0)
         
-        # Aktuellen Wert aus der Config frisch lesen
+        # Read the active engine from configuration.
         import configparser
         config = configparser.ConfigParser()
         config.read(cfg.CONFIG_FILE, encoding="utf-8-sig")
@@ -328,67 +328,64 @@ class EngineManagerDialog(QDialog):
             self.table.insertRow(row)
             self.table.setItem(row, 0, QTableWidgetItem(eng))
             
-            status = self.get_engine_status(eng) # Prüft, ob EXE existiert
+            status = self.get_engine_status(eng)
             status_item = QTableWidgetItem(status)
             
-            # Markierung der AKTIVEN Engine
-            # Nur markieren, wenn der Name übereinstimmt UND nicht leer ist
+            # Mark the active engine.
             if current_cfg and eng.lower() == current_cfg.lower():
-                status_item.setText(f"AKTIV ({status})")
-                color = QColor(46, 204, 113) if status == "BEREIT" else QColor(231, 76, 60)
+                status_item.setText(f"ACTIVE ({status})")
+                color = QColor(46, 204, 113) if status == "READY" else QColor(231, 76, 60)
                 status_item.setBackground(color)
             
             self.table.setItem(row, 1, status_item)
 
-    # In Gui.py innerhalb der Klasse EngineManagerDialog
-
     def set_active(self):
-        """Setzt die in der Tabelle gewählte Engine als aktive Start-Engine."""
+        """Set the selected engine as the active launch engine."""
         row = self.table.currentRow()
         if row < 0: return
         eng_name = self.table.item(row, 0).text()
         
-        # 1. Datei einlesen
+        # Load configuration.
         config = configparser.ConfigParser()
         config.read(cfg.CONFIG_FILE, encoding="utf-8-sig")
         
-        # 2. Sektion sicherstellen
+        # Ensure the section exists.
         if not config.has_section("SETTINGS"):
             config.add_section("SETTINGS")
             
-        # 3. Wert setzen
+        # Set the active engine.
         config.set("SETTINGS", "current_engine", eng_name)
         
-        # 4. Speichern mit utf-8-sig (damit config.py es sicher lesen kann)
+        # Save configuration.
         with open(cfg.CONFIG_FILE, "w", encoding="utf-8-sig") as f:
             config.write(f)
             
-        # 5. Globalen Wert im Speicher aktualisieren
+        # Update the runtime value.
         cfg.CURRENT_ENGINE = eng_name
         
-        # 6. UI-Feedback
+        # Refresh the UI.
         self.load_engines()
         if self.parent():
             self.parent().refresh_data()
             
-        QMessageBox.information(self, "Erfolg", f"{eng_name} ist jetzt aktiv.")
+        QMessageBox.information(self, "Success", f"{eng_name} is now active.")
 
     def download_selected(self):
-        """Nutzt den engine_manager zum Download."""
+        """Use engine_manager to download the selected engine."""
         row = self.table.currentRow()
         if row < 0: return
         eng_name = self.table.item(row, 0).text()
         
-        self.info_label.setText(f"Downloade {eng_name}...")
+        self.info_label.setText(f"Downloading {eng_name}...")
         QApplication.processEvents()
         
-        # Hier rufen wir deine Funktion aus dem engine_manager auf
+        # Start engine installation.
         success = engines.install_engine(eng_name, callback=lambda m: self.info_label.setText(m))
         if success:
-            QMessageBox.information(self, "Erfolg", f"{eng_name} wurde installiert.")
+            QMessageBox.information(self, "Success", f"{eng_name} was installed.")
             self.load_engines()
         else:
-            QMessageBox.critical(self, "Fehler", "Download fehlgeschlagen.")
+            QMessageBox.critical(self, "Error", "Download failed.")
 
 
 class ApiBrowserDialog(QDialog):
@@ -402,22 +399,22 @@ class ApiBrowserDialog(QDialog):
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.layout.setSpacing(0)
 
-        # --- SUCHE ---
+        # Search
         search_layout = QHBoxLayout()
         search_layout.setContentsMargins(5, 5, 5, 5)
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Suchbegriff eingeben...")
-        self.btn_search = QPushButton("Suchen")
+        self.search_input.setPlaceholderText("Enter a search term...")
+        self.btn_search = QPushButton("Search")
         search_layout.addWidget(self.search_input)
         search_layout.addWidget(self.btn_search)
         self.layout.addLayout(search_layout)
 
-        # --- SHORTCUTS (Synchronisiert mit deiner api.py) ---
+        # Shortcut categories
         shortcut_layout = QHBoxLayout()
         shortcut_layout.setContentsMargins(5, 3, 5, 3)
         shortcut_layout.setSpacing(5)
         
-        # WICHTIG: Die zweiten Werte müssen exakt so heißen wie in deiner api.py!
+        # Category names must match the API categories.
         self.shortcuts = [
             ("Doom 1", "doom_megawads"),
             ("Doom 2", "doom2_megawads"),
@@ -432,11 +429,11 @@ class ApiBrowserDialog(QDialog):
         
         self.layout.addLayout(shortcut_layout)
 
-        # --- TABELLE ---
+        # Results table
         self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["Titel", "Größe", "Rating", "Status"])
+        self.table.setHorizontalHeaderLabels(["Title", "Size", "Rating", "Status"])
         
-        # Header-Design
+        # Header styling
         self.table.horizontalHeader().setFixedHeight(38)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         for i in range(1, 4):
@@ -458,18 +455,18 @@ class ApiBrowserDialog(QDialog):
         self.table.setContentsMargins(0, 0, 0, 0)
         self.layout.addWidget(self.table)
 
-        # --- DOWNLOAD & STATUS ---
-        self.btn_download = QPushButton("Ausgewählte Mod Herunterladen")
+        # Download and status
+        self.btn_download = QPushButton("Download Selected Map")
         self.btn_download.setMinimumHeight(45)
         self.btn_download.setEnabled(False)
         self.btn_download.setStyleSheet("background-color: #2980b9; color: white; font-weight: bold;")
         self.layout.addWidget(self.btn_download)
 
-        self.status_bottom = QLabel("Bereit.")
+        self.status_bottom = QLabel("Ready.")
         self.status_bottom.setContentsMargins(5, 5, 5, 5)
         self.layout.addWidget(self.status_bottom)
 
-        # Connections
+        # Signal connections
         self.btn_search.clicked.connect(self.perform_search)
         self.search_input.returnPressed.connect(self.perform_search)
         self.table.itemSelectionChanged.connect(lambda: self.btn_download.setEnabled(True))
@@ -478,47 +475,47 @@ class ApiBrowserDialog(QDialog):
         self.current_results = []
 
     def load_top(self, category):
-        self.status_bottom.setText(f"Lade Top-Einträge für {category}...")
+        self.status_bottom.setText(f"Loading top entries for {category}...")
         self.table.setRowCount(0)
         QApplication.processEvents()
         
         try:
-            # Jetzt mit detaillierter Fehler-Rückgabe
+            # Load API data.
             self.current_results = api.get_top_wads(category, callback=lambda msg: self.status_bottom.setText(msg))
             self.populate_table()
         except Exception as e:
-            # Hier zeigen wir jetzt den echten Fehler an!
+            # Show the specific error in the status line.
             error_type = type(e).__name__
-            self.status_bottom.setText(f"❌ API-Fehler ({error_type}): {str(e)[:50]}...")
-            print(f"[GUI DEBUG] Detailierter Fehler: {traceback.format_exc()}")
+            self.status_bottom.setText(f"API error ({error_type}): {str(e)[:50]}...")
+            print(f"[GUI DEBUG] Detailed error: {traceback.format_exc()}")
 
     def perform_search(self):
         query = self.search_input.text().strip()
         if not query: return
-        self.status_bottom.setText(f"Suche nach '{query}'...")
+        self.status_bottom.setText(f"Searching for '{query}'...")
         QApplication.processEvents()
         self.current_results = api.search_idgames(query)
         self.populate_table()
 
     def populate_table(self):
         
-        # 1. Signale blockieren, um Endlosschleifen/Spam zu verhindern
+        # Block signals while rebuilding the table.
         self.table.blockSignals(True)
         
         try:
             self.table.setRowCount(0)
-            self.status_bottom.setText(f"Verarbeite {len(self.current_results)} Ergebnisse...")
+            self.status_bottom.setText(f"Processing {len(self.current_results)} results...")
             
             for row, res in enumerate(self.current_results):
                 self.table.insertRow(row)
                 
-                # Daten aus dem API-Resultat holen
+                # Read values from the API result.
                 title = res.get("title") or res.get("filename", "Unknown")
                 size_mb = f"{int(res.get('size', 0)) / (1024*1024):.1f} MB"
                 rating = f"{float(res.get('rating', 0) or 0):.1f} ★"
                 is_installed = res.get("is_installed", False)
                 
-                # Items erstellen
+                # Create table items.
                 display_title = f"✓ {title}" if is_installed else str(title)
                 item_title = QTableWidgetItem(display_title)
                 item_title.setData(Qt.UserRole, res)
@@ -533,7 +530,7 @@ class ApiBrowserDialog(QDialog):
                 item_status = QTableWidgetItem(status_text)
                 item_status.setTextAlignment(Qt.AlignCenter)
 
-                # Styling nur anwenden, wenn installiert
+                # Highlight installed entries.
                 if is_installed:
                     green = QColor(46, 204, 113)
                     bold_font = QFont("Arial", 9, QFont.Bold)
@@ -542,23 +539,23 @@ class ApiBrowserDialog(QDialog):
                     item_status.setForeground(green)
                     item_status.setFont(bold_font)
 
-                # Jedes Item GENAU EINMAL setzen
+                # Set items.
                 self.table.setItem(row, 0, item_title)
                 self.table.setItem(row, 1, item_size)
                 self.table.setItem(row, 2, item_rating)
                 self.table.setItem(row, 3, item_status)
 
         finally:
-            # Signale wieder freigeben
+            # Re-enable signals.
             self.table.blockSignals(False)
-            self.status_bottom.setText(f"{len(self.current_results)} Ergebnisse gefunden.")
+            self.status_bottom.setText(f"{len(self.current_results)} results found.")
 
     def download_map(self):
         row = self.table.currentRow()
         if row < 0: return
         file_data = self.current_results[row]
         
-        # Show a progress notice so the user knows the download started
+        # Show a progress dialog for the download.
         wait_dlg = QDialog(self)
         wait_dlg.setWindowTitle("Installing...")
         wait_dlg.setModal(True)
@@ -581,26 +578,30 @@ class ApiBrowserDialog(QDialog):
         wait_dlg.close()
         
         if success:
-            QMessageBox.information(self, "Erfolg", f"Download abgeschlossen!\nID: {msg}")
+            QMessageBox.information(self, "Success", f"Download complete.\nID: {msg}")
             parent = self.parent()
             if parent and hasattr(parent, "set_pending_focus_map"):
                 parent.set_pending_focus_map(msg)
-            self.main_refresh_signal.emit() # Refresht die Haupt-GUI Tabelle
-            self.populate_table() # Setzt den Status auf INSTALLED
+            self.main_refresh_signal.emit()
+            self.populate_table()
         else:
-            QMessageBox.critical(self, "Fehler", f"Download fehlgeschlagen:\n{msg}")
+            QMessageBox.critical(self, "Error", f"Download failed:\n{msg}")
         
         self.btn_download.setEnabled(True)
 
 
 class DatabaseViewerDialog(QDialog):
-    """Zeigt einen Live-Einblick in die SQLite-Datenbank und erlaubt Exporte."""
+    """Show a live view of the SQLite database and allow exports."""
 
     DISPLAY_HEADER = [
-        "ID", "Name", "IWAD", "Path", "Kategorie",
+        "ID", "Name", "IWAD", "Path", "Category",
         "MOD", "ARGS", "Playtime", "LastPlayed", "RemoteID",
         "Favorite", "Cleared", "NoMods"
     ]
+
+    FIELD_MAP = {
+        "Category": "Kategorie",
+    }
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -612,22 +613,22 @@ class DatabaseViewerDialog(QDialog):
         layout = QVBoxLayout(self)
 
         filter_layout = QHBoxLayout()
-        filter_layout.addWidget(QLabel("Kategorie:"))
+        filter_layout.addWidget(QLabel("Category:"))
         self.cmb_category = QComboBox()
-        self.cmb_category.addItem("ALLE")
+        self.cmb_category.addItem("ALL")
         filter_layout.addWidget(self.cmb_category)
 
         filter_layout.addWidget(QLabel("IWAD:"))
         self.cmb_iwad = QComboBox()
-        self.cmb_iwad.addItem("ALLE")
+        self.cmb_iwad.addItem("ALL")
         filter_layout.addWidget(self.cmb_iwad)
 
-        filter_layout.addWidget(QLabel("Suche:"))
+        filter_layout.addWidget(QLabel("Search:"))
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("ID oder Name...")
+        self.search_input.setPlaceholderText("ID or name...")
         filter_layout.addWidget(self.search_input, 1)
 
-        self.btn_reload = QPushButton("Neu laden")
+        self.btn_reload = QPushButton("Reload")
         filter_layout.addWidget(self.btn_reload)
         layout.addLayout(filter_layout)
 
@@ -640,7 +641,7 @@ class DatabaseViewerDialog(QDialog):
         layout.addWidget(self.table)
 
         export_layout = QHBoxLayout()
-        self.lbl_info = QLabel("0 Einträge")
+        self.lbl_info = QLabel("0 entries")
         export_layout.addWidget(self.lbl_info)
         export_layout.addStretch()
         self.btn_export_csv = QPushButton("Export CSV")
@@ -668,12 +669,12 @@ class DatabaseViewerDialog(QDialog):
         self.cmb_iwad.blockSignals(True)
 
         self.cmb_category.clear()
-        self.cmb_category.addItem("ALLE")
+        self.cmb_category.addItem("ALL")
         for c in categories:
             self.cmb_category.addItem(c)
 
         self.cmb_iwad.clear()
-        self.cmb_iwad.addItem("ALLE")
+        self.cmb_iwad.addItem("ALL")
         for iwad in iwads:
             self.cmb_iwad.addItem(iwad)
 
@@ -694,9 +695,9 @@ class DatabaseViewerDialog(QDialog):
             map_id = str(row.get("ID", "")).lower()
             name = str(row.get("Name", "")).lower()
 
-            if selected_cat != "ALLE" and cat != selected_cat:
+            if selected_cat != "ALL" and cat != selected_cat:
                 continue
-            if selected_iwad != "alle" and iwad != selected_iwad:
+            if selected_iwad != "all" and iwad != selected_iwad:
                 continue
             if needle and needle not in map_id and needle not in name:
                 continue
@@ -709,18 +710,19 @@ class DatabaseViewerDialog(QDialog):
 
         for row_index, row_data in enumerate(filtered):
             for col_index, col_name in enumerate(self.DISPLAY_HEADER):
-                value = str(row_data.get(col_name, ""))
+                source_key = self.FIELD_MAP.get(col_name, col_name)
+                value = str(row_data.get(source_key, ""))
                 self.table.setItem(row_index, col_index, QTableWidgetItem(value))
 
-        self.lbl_info.setText(f"{len(filtered)} von {len(self.all_rows)} Einträgen")
+        self.lbl_info.setText(f"{len(filtered)} of {len(self.all_rows)} entries")
 
     def export_csv(self):
         rows = self._get_filtered_rows()
         if not rows:
-            QMessageBox.information(self, "Export", "Keine Daten zum Exportieren.")
+            QMessageBox.information(self, "Export", "No data available for export.")
             return
 
-        target, _ = QFileDialog.getSaveFileName(self, "CSV exportieren", os.path.join(cfg.BASE_DIR, "maps_export.csv"), "CSV (*.csv)")
+        target, _ = QFileDialog.getSaveFileName(self, "Export CSV", os.path.join(cfg.BASE_DIR, "maps_export.csv"), "CSV (*.csv)")
         if not target:
             return
 
@@ -729,30 +731,30 @@ class DatabaseViewerDialog(QDialog):
                 writer = csv.DictWriter(f, fieldnames=db.HEADER, delimiter=";", extrasaction="ignore")
                 writer.writeheader()
                 writer.writerows(rows)
-            QMessageBox.information(self, "Export", f"CSV erfolgreich exportiert:\n{target}")
+            QMessageBox.information(self, "Export", f"CSV exported successfully:\n{target}")
         except Exception as e:
-            QMessageBox.critical(self, "Export-Fehler", str(e))
+            QMessageBox.critical(self, "Export Error", str(e))
 
     def export_json(self):
         rows = self._get_filtered_rows()
         if not rows:
-            QMessageBox.information(self, "Export", "Keine Daten zum Exportieren.")
+            QMessageBox.information(self, "Export", "No data available for export.")
             return
 
-        target, _ = QFileDialog.getSaveFileName(self, "JSON exportieren", os.path.join(cfg.BASE_DIR, "maps_export.json"), "JSON (*.json)")
+        target, _ = QFileDialog.getSaveFileName(self, "Export JSON", os.path.join(cfg.BASE_DIR, "maps_export.json"), "JSON (*.json)")
         if not target:
             return
 
         try:
             with open(target, "w", encoding="utf-8") as f:
                 json.dump(rows, f, ensure_ascii=False, indent=2)
-            QMessageBox.information(self, "Export", f"JSON erfolgreich exportiert:\n{target}")
+            QMessageBox.information(self, "Export", f"JSON exported successfully:\n{target}")
         except Exception as e:
-            QMessageBox.critical(self, "Export-Fehler", str(e))
+            QMessageBox.critical(self, "Export Error", str(e))
 
 
 class InstallToast(QFrame):
-    """Kleines Popup unten rechts mit Aktion zum Anspringen einer Map."""
+    """Small popup in the lower-right corner with an action to jump to a map."""
     jump_requested = Signal(str)
 
     def __init__(self, parent=None):
@@ -771,13 +773,13 @@ class InstallToast(QFrame):
         layout.setContentsMargins(10, 8, 10, 8)
         layout.setSpacing(6)
 
-        self.lbl_title = QLabel("Map installiert")
+        self.lbl_title = QLabel("Map installed")
         self.lbl_title.setStyleSheet("font-weight: bold;")
         self.lbl_msg = QLabel("-")
         self.lbl_msg.setWordWrap(True)
 
         btn_row = QHBoxLayout()
-        self.btn_jump = QPushButton("Anspringen")
+        self.btn_jump = QPushButton("Jump To")
         self.btn_close = QPushButton("X")
         self.btn_close.setFixedWidth(28)
         self.btn_close.setStyleSheet(
@@ -803,7 +805,7 @@ class InstallToast(QFrame):
         if not self.current_map_id:
             return
 
-        self.lbl_msg.setText(f"Map installiert: {self.current_map_id}")
+        self.lbl_msg.setText(f"Map installed: {self.current_map_id}")
         self.adjustSize()
         self._position_bottom_right()
         self.show()
@@ -827,13 +829,14 @@ class InstallToast(QFrame):
 
 
 # ============================================================================
-# HAUPT-GUI (D.M.S. SCHALTZENTRALE)
+# Main GUI
 # ============================================================================
 
 class DoomManagerGUI(QMainWindow):
     signal_refresh = Signal()
     NEW_WINDOW_HOURS = 72
     CHANGELOG_TAG = "3.1-ui-2026-04"
+    CLICK_FILL_SPEED = 7
 
     def __init__(self):
         super().__init__()
@@ -845,8 +848,8 @@ class DoomManagerGUI(QMainWindow):
         self.sort_mode = cfg.config.get("SETTINGS", "map_sort_mode", fallback="insert")
         self.quick_filter = cfg.config.get("SETTINGS", "map_quick_filter", fallback="ALLE").upper()
         self.recent_installs = self._load_recent_installs()
-        self.preview_title_full_text = "Keine Karte ausgewaehlt"
-        self.preview_path_full_text = "Pfad: -"
+        self.preview_title_full_text = "No map selected"
+        self.preview_path_full_text = "Path: -"
         self.install_toast = None
         self.click_fill_map_id = ""
         self.click_fill_progress = 0.0
@@ -860,18 +863,22 @@ class DoomManagerGUI(QMainWindow):
         self.install_toast.jump_requested.connect(self.jump_to_map)
         self.refresh_data()
         
-        # Einrichtungsassistent beim ersten Start
+        # Setup wizard on first start.
         if should_run_wizard():
             wizard = SetupWizard(self)
             wizard.wizard_complete.connect(self.refresh_data)
             wizard.exec()
         
-        # Check für Updates beim Start
+        # Check for updates on startup.
         self.check_updates()
         self.maybe_show_changelog()
 
+        # Optional startup scan for local imports without a permanent watcher.
+        if cfg.config.getboolean("SETTINGS", "install_scan_on_startup", fallback=False):
+            QTimer.singleShot(800, lambda: self.run_install_scan(show_empty_message=False, auto_mode=True))
+
     def set_pending_focus_map(self, map_id, show_toast=True):
-        """Merkt sich eine Map-ID, die nach dem nächsten Refresh automatisch fokussiert wird."""
+        """Remember a map ID that should be focused after the next refresh."""
         if map_id:
             clean_id = str(map_id).strip().upper()
             self.pending_focus_map_id = clean_id
@@ -880,12 +887,12 @@ class DoomManagerGUI(QMainWindow):
                 self.show_install_toast(clean_id)
 
     def show_install_toast(self, map_id):
-        """Zeigt ein kleines Install-Popup unten rechts mit Anspringen-Button."""
+        """Show a small install popup in the lower-right corner with a jump button."""
         if self.install_toast:
             self.install_toast.show_for_map(map_id)
 
     def jump_to_map(self, map_id):
-        """Springt direkt zu einer Karten-ID in der aktuellen Tabelle."""
+        """Jump directly to a map ID in the current table."""
         clean_id = str(map_id or "").strip().upper()
         if not clean_id:
             return
@@ -895,31 +902,131 @@ class DoomManagerGUI(QMainWindow):
             self.refresh_data()
 
     def maybe_show_changelog(self):
-        """Zeigt Changelog einmal pro Tag-Version nach App-Start."""
+        """Show the changelog once per tagged version after app startup."""
         seen_tag = cfg.config.get("SETTINGS", "last_seen_changelog", fallback="").strip()
         if seen_tag != self.CHANGELOG_TAG:
             self.show_changelog(force=False)
             cfg.update_config_value("SETTINGS", "last_seen_changelog", self.CHANGELOG_TAG)
 
+    def _capture_map_ids(self):
+        """Return a normalized set of current map IDs for before/after install checks."""
+        return {str(m.get("ID", "")).strip().upper() for m in db.get_all_maps() if m.get("ID")}
+
+    def _mark_new_maps_from_diff(self, before_ids):
+        """Mark and focus newly created IDs compared to a previous snapshot."""
+        after_ids = self._capture_map_ids()
+        new_ids = sorted(after_ids - set(before_ids), key=self._sort_map_id_key)
+        if new_ids:
+            self.mark_maps_as_new(new_ids)
+            self.set_pending_focus_map(new_ids[-1])
+        return len(new_ids)
+
+    def _get_backup_keep_count(self):
+        """Load backup retention count from config with a safe fallback."""
+        raw_value = cfg.config.get("SETTINGS", "backup_keep_count", fallback="10").strip()
+        try:
+            return max(1, int(raw_value))
+        except Exception:
+            return 10
+
+    def create_guard_backup(self, label, show_message=False):
+        """Create a ZIP backup and prune old snapshots according to retention settings."""
+        try:
+            backup_path = updater.create_update_backup(label)
+            removed = updater.prune_update_backups(self._get_backup_keep_count())
+            status_msg = f"Backup created: {os.path.basename(backup_path)}"
+            if removed > 0:
+                status_msg += f" | Removed old backups: {removed}"
+            self.statusBar().showMessage(status_msg, 7000)
+            if show_message:
+                QMessageBox.information(self, "Backup", status_msg)
+            return backup_path
+        except Exception as e:
+            QMessageBox.warning(self, "Backup", f"Backup could not be created:\n{e}")
+            return ""
+
+    def create_manual_backup(self):
+        """Create a user-triggered backup snapshot from the top bar."""
+        self.create_guard_backup("manual")
+
+    def restore_backup_dialog(self):
+        """Allow selecting and restoring one ZIP backup from update_backups/."""
+        backups = updater.get_update_backups()
+        if not backups:
+            QMessageBox.information(self, "Restore Backup", "No backups were found.")
+            return
+
+        display_to_path = {}
+        options = []
+        for path in backups:
+            size_kb = max(1, int(os.path.getsize(path) / 1024))
+            label = f"{os.path.basename(path)} ({size_kb} KB)"
+            display_to_path[label] = path
+            options.append(label)
+
+        selected, ok = QInputDialog.getItem(
+            self,
+            "Restore Backup",
+            "Select a backup to restore:",
+            options,
+            0,
+            False,
+        )
+        if not ok:
+            return
+
+        chosen_path = display_to_path.get(selected)
+        if not chosen_path:
+            return
+
+        # Keep a fresh snapshot before overwrite so rollback is always possible.
+        self.create_guard_backup("prerestore")
+
+        confirm = QMessageBox.question(
+            self,
+            "Restore Backup",
+            "Restore this backup now? The current state will be overwritten.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        if updater.restore_update_backup(chosen_path):
+            QMessageBox.information(self, "Restore Backup", "Backup restored. Restart the launcher to ensure a clean state.")
+        else:
+            QMessageBox.warning(self, "Restore Backup", "Backup restore failed.")
+
+    def update_install_scan_button_text(self):
+        """Reflect startup scan mode in the top bar button text."""
+        enabled = cfg.config.getboolean("SETTINGS", "install_scan_on_startup", fallback=False)
+        self.btn_install_scan_toggle.setText("🧲 Startup Scan: ON" if enabled else "🧲 Startup Scan: OFF")
+
+    def toggle_install_scan_on_startup(self):
+        """Enable or disable Install folder scanning on startup."""
+        current = cfg.config.getboolean("SETTINGS", "install_scan_on_startup", fallback=False)
+        cfg.update_config_value("SETTINGS", "install_scan_on_startup", "False" if current else "True")
+        self.update_install_scan_button_text()
+
     def _build_changelog_html(self):
-        """Liefert den kompakten What's New Text."""
+        """Return the compact What's New text."""
         return (
             "<b>Mini Changelog</b><br><br>"
             "<b>UI & Navigation</b><br>"
-            "- Live-Suche + Quick-Filter-Chips<br>"
-            "- Sortiermenue mit Speicherung<br>"
-            "- Neue Karten bekommen NEW-Badge<br><br>"
-            "<b>Install-Flow</b><br>"
-            "- Popup unten rechts: 'Map installiert'<br>"
-            "- Button 'Anspringen' springt direkt zur Karte<br><br>"
-            "<b>Komfort</b><br>"
-            "- Zufallskarte nutzt sichtbare/gefilterte Karten<br>"
-            "- Preview-Panel mit Map-Metadaten<br>"
-            "- Dashboard erweitert (Clear %, FAV, NEW, VIEW)"
+            "- Live search with quick filter chips<br>"
+            "- Sort menu with persistence<br>"
+            "- New maps receive a NEW badge<br><br>"
+            "<b>Install Flow</b><br>"
+            "- Bottom-right popup: 'Map installed'<br>"
+            "- 'Jump To' button focuses the installed map<br><br>"
+            "<b>Convenience</b><br>"
+            "- Random map uses visible/filtered maps<br>"
+            "- Preview panel with map metadata<br>"
+            "- Expanded dashboard (Clear %, FAV, NEW, VIEW)"
         )
 
     def show_changelog(self, force=False):
-        """Zeigt den Mini-Changelog Dialog."""
+        """Show the mini changelog dialog."""
         msg = QMessageBox(self)
         msg.setWindowTitle("What's New")
         msg.setIcon(QMessageBox.Information)
@@ -927,11 +1034,11 @@ class DoomManagerGUI(QMainWindow):
         msg.setText(self._build_changelog_html())
         msg.setStandardButtons(QMessageBox.StandardButton.Ok)
         if not force:
-            msg.setInformativeText("Dieser Hinweis wird einmal pro Versions-Update gezeigt.")
+            msg.setInformativeText("This notice is shown once per version update.")
         msg.exec()
 
     def _load_recent_installs(self):
-        """Liest NEW-Markierungen aus der Konfiguration und entfernt alte Einträge."""
+        """Read NEW markers from configuration and remove stale entries."""
         raw = cfg.config.get("SETTINGS", "recent_installs", fallback="").strip()
         installs = {}
 
@@ -950,7 +1057,7 @@ class DoomManagerGUI(QMainWindow):
         return self.recent_installs
 
     def _save_recent_installs(self):
-        """Speichert NEW-Markierungen kompakt als SETTINGS.recent_installs."""
+        """Persist NEW markers compactly as SETTINGS.recent_installs."""
         if not self.recent_installs:
             cfg.update_config_value("SETTINGS", "recent_installs", "")
             return
@@ -959,7 +1066,7 @@ class DoomManagerGUI(QMainWindow):
         cfg.update_config_value("SETTINGS", "recent_installs", payload)
 
     def _prune_recent_installs(self):
-        """Entfernt NEW-Markierungen, die älter als das Zeitfenster sind."""
+        """Remove NEW markers older than the configured time window."""
         cutoff = datetime.now() - timedelta(hours=self.NEW_WINDOW_HOURS)
         keep = {}
 
@@ -974,7 +1081,7 @@ class DoomManagerGUI(QMainWindow):
         self.recent_installs = keep
 
     def mark_maps_as_new(self, map_ids):
-        """Markiert eine oder mehrere Karten als NEW und persistiert das Ergebnis."""
+        """Mark one or more maps as NEW and persist the result."""
         now_iso = datetime.now().isoformat(timespec="seconds")
         changed = False
 
@@ -990,7 +1097,7 @@ class DoomManagerGUI(QMainWindow):
             self._save_recent_installs()
 
     def _is_recent_install(self, map_id):
-        """Prüft, ob eine Karte aktuell als NEW markiert ist."""
+        """Check whether a map is currently marked as NEW."""
         mid = str(map_id or "").strip().upper()
         if not mid:
             return False
@@ -1007,7 +1114,7 @@ class DoomManagerGUI(QMainWindow):
         return dt >= (datetime.now() - timedelta(hours=self.NEW_WINDOW_HOURS))
 
     def _sort_map_id_key(self, map_id):
-        """Sortierschlüssel für IDs wie DOOM123 oder HEXEN7."""
+        """Sort key for IDs such as DOOM123 or HEXEN7."""
         mid = str(map_id or "").strip().upper()
         prefix = "".join(ch for ch in mid if ch.isalpha())
         suffix = "".join(ch for ch in mid if ch.isdigit())
@@ -1015,7 +1122,7 @@ class DoomManagerGUI(QMainWindow):
         return (prefix, number, mid)
 
     def _focus_map_in_table(self, map_id):
-        """Sucht eine Map in allen Spalten, markiert sie und scrollt sie sichtbar."""
+        """Find a map in any column, select it, and scroll it into view."""
         target = str(map_id or "").strip().upper()
         if not target:
             return False
@@ -1039,20 +1146,28 @@ class DoomManagerGUI(QMainWindow):
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout(main_widget)
 
-        # --- TOP BAR (Stats & Buttons oben rechts) ---
+        # Top bar
         top_layout = QHBoxLayout()
         
         self.btn_api = QPushButton("🌐 Doomworld")
         self.btn_eng = QPushButton("⚙️ Engine Manager")
+        self.btn_backup_create = QPushButton("💾 Create Backup")
+        self.btn_backup_restore = QPushButton("♻ Restore Backup")
+        self.btn_install_scan = QPushButton("🔎 Scan Install")
+        self.btn_install_scan_toggle = QPushButton("")
         self.btn_install = QPushButton("📥 Install Maps")
         self.btn_manual_add = QPushButton("➕ Custom Map")
         self.btn_db_viewer = QPushButton("🗄 DB Viewer")
         self.btn_changelog = QPushButton("📝 What's New")
         self.btn_tracker_toggle = QPushButton("")
 
-        # Signale verknüpfen
+        # Connect buttons
         self.btn_api.clicked.connect(self.open_api)
         self.btn_eng.clicked.connect(self.open_eng)
+        self.btn_backup_create.clicked.connect(self.create_manual_backup)
+        self.btn_backup_restore.clicked.connect(self.restore_backup_dialog)
+        self.btn_install_scan.clicked.connect(lambda: self.run_install_scan(show_empty_message=True, auto_mode=False))
+        self.btn_install_scan_toggle.clicked.connect(self.toggle_install_scan_on_startup)
         self.btn_install.clicked.connect(self.run_installer)
         self.btn_manual_add.clicked.connect(self.add_map_manually)
         self.btn_db_viewer.clicked.connect(self.open_db_viewer)
@@ -1060,22 +1175,27 @@ class DoomManagerGUI(QMainWindow):
         self.btn_tracker_toggle.clicked.connect(self.toggle_tracker)
 
         self.update_tracker_button_text()
+        self.update_install_scan_button_text()
         
-        top_layout.addStretch() # Schiebt alles nach rechts
+        top_layout.addStretch()  # Align buttons to the right.
         top_layout.addWidget(self.btn_tracker_toggle)
+        top_layout.addWidget(self.btn_install_scan_toggle)
+        top_layout.addWidget(self.btn_backup_restore)
+        top_layout.addWidget(self.btn_backup_create)
         top_layout.addWidget(self.btn_changelog)
         top_layout.addWidget(self.btn_db_viewer)
         top_layout.addWidget(self.btn_manual_add)
+        top_layout.addWidget(self.btn_install_scan)
         top_layout.addWidget(self.btn_install)
         top_layout.addWidget(self.btn_api)
         top_layout.addWidget(self.btn_eng)
         layout.addLayout(top_layout)
 
-        # --- SPLITTER (Tabelle Links, Panel Rechts) ---
+        # Main splitter
         splitter = QSplitter(Qt.Horizontal)
         layout.addWidget(splitter)
 
-        # 1. TABELLE (Links im Splitter)
+        # Left table
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["", "", "", "", ""])
         self.table.horizontalHeader().setVisible(False)
@@ -1085,7 +1205,7 @@ class DoomManagerGUI(QMainWindow):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectItems) 
         
-        # --- FLAT-CARD STYLING (Delegate übernimmt das Rendering) ---
+        # Table styling (the delegate renders cells)
         self.table.setShowGrid(False)
         self.table.verticalHeader().setDefaultSectionSize(40)
         self.table.setMouseTracking(True)
@@ -1110,9 +1230,9 @@ class DoomManagerGUI(QMainWindow):
         self.table.click_fill_progress = 0.0
         self.table.click_fill_armed = False
         self.table.setItemDelegate(MapItemDelegate(self.table))
-        # ------------------------------
+        # Delegate active
 
-        # Signale für die Tabelle
+        # Table signals
         self.table.customContextMenuRequested.connect(self.show_context_menu)
         self.table.itemDoubleClicked.connect(self.run_selected_map)
         self.table.itemPressed.connect(self.on_table_item_pressed)
@@ -1152,9 +1272,9 @@ class DoomManagerGUI(QMainWindow):
         left_layout.setSpacing(0)
         left_layout.addWidget(header_container)
 
-        # Live-Suche fuer grosse Kartenlisten.
+        # Live search for map lists
         self.map_search_input = QLineEdit()
-        self.map_search_input.setPlaceholderText("Karte suchen (Name, ID, IWAD)...")
+        self.map_search_input.setPlaceholderText("Search maps (name, ID, IWAD)...")
         self.map_search_input.setClearButtonEnabled(True)
         self.map_search_input.setStyleSheet(
             "QLineEdit {"
@@ -1177,14 +1297,14 @@ class DoomManagerGUI(QMainWindow):
         controls_layout.setContentsMargins(6, 0, 6, 6)
         controls_layout.setSpacing(6)
 
-        lbl_sort = QLabel("Sortierung:")
+        lbl_sort = QLabel("Sort:")
         lbl_sort.setStyleSheet("color: #bcbcbc; font-weight: bold;")
         self.cmb_sort = QComboBox()
         self.cmb_sort.addItem("Default", "insert")
-        self.cmb_sort.addItem("Neueste zuerst", "newest")
+        self.cmb_sort.addItem("Newest first", "newest")
         self.cmb_sort.addItem("Name A-Z", "name_asc")
-        self.cmb_sort.addItem("Favoriten zuerst", "fav_first")
-        self.cmb_sort.addItem("Zuletzt gespielt", "last_played")
+        self.cmb_sort.addItem("Favorites first", "fav_first")
+        self.cmb_sort.addItem("Last played", "last_played")
         self.cmb_sort.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.cmb_sort.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.cmb_sort.setStyleSheet(
@@ -1199,7 +1319,7 @@ class DoomManagerGUI(QMainWindow):
         chips_row.setSpacing(6)
         self.quick_filter_buttons = {}
         chip_defs = [
-            ("ALLE", "Alle"),
+            ("ALLE", "All"),
             ("DOOM", "Doom"),
             ("HERETIC", "Heretic"),
             ("HEXEN", "Hexen"),
@@ -1223,10 +1343,10 @@ class DoomManagerGUI(QMainWindow):
 
         info_row = QHBoxLayout()
         legend = QLabel(
-            "<span style='color:#3498db; font-weight:bold;'>NEW</span> = neu installiert   "
-            "<span style='color:#FFD700; font-weight:bold;'>★</span> = Favorit   "
+            "<span style='color:#3498db; font-weight:bold;'>NEW</span> = newly installed   "
+            "<span style='color:#FFD700; font-weight:bold;'>★</span> = Favorite   "
             "<span style='color:#2ecc71; font-weight:bold;'>✓</span> = Clear   "
-            "<span style='color:#e67e22; font-weight:bold;'>M</span> = Mods gesperrt"
+            "<span style='color:#e67e22; font-weight:bold;'>M</span> = Mods locked"
         )
         legend.setStyleSheet("color: #bcbcbc; font-size: 11px; padding-left: 2px;")
         info_row.addWidget(legend)
@@ -1242,12 +1362,12 @@ class DoomManagerGUI(QMainWindow):
 
         splitter.addWidget(left_panel)
 
-        # 2. RECHTES PANEL (Mods & Start-Button)
+        # Right panel
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(10, 0, 10, 10) # Etwas Rand für eine sauberere Optik
+        right_layout.setContentsMargins(10, 0, 10, 10)
 
-        # --- Map Preview ---
+        # Map preview
         preview_group = QGroupBox("Map Preview")
         preview_group.setStyleSheet("""
             QGroupBox { font-weight: bold; border: 1px solid #555; border-radius: 5px; margin-top: 8px; }
@@ -1257,7 +1377,7 @@ class DoomManagerGUI(QMainWindow):
         preview_layout.setContentsMargins(8, 8, 8, 6)
         preview_layout.setSpacing(3)
 
-        self.preview_title = QLabel("Keine Karte ausgewaehlt")
+        self.preview_title = QLabel("No map selected")
         self.preview_title.setStyleSheet("color: #ecf0f1; font-size: 13px; font-weight: bold;")
         self.preview_title.setWordWrap(False)
         self.preview_title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
@@ -1266,11 +1386,12 @@ class DoomManagerGUI(QMainWindow):
         self.preview_tag.setFixedHeight(20)
         self.preview_tag.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self.preview_tag.setStyleSheet("background-color: #3a3a3a; color: #dcdcdc; border-radius: 10px; font-size: 11px; padding: 0 8px;")
-        self.preview_meta = QLabel("ID: - | IWAD: -\nKategorie: -")
+        self.preview_meta = QLabel("ID: -\nIWAD: -\nCategory: -")
         self.preview_meta.setStyleSheet("color: #b8b8b8;")
+        self.preview_meta.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.preview_play = QLabel("Playtime: 0 min\nLast Played: -")
         self.preview_play.setStyleSheet("color: #9aa0a6;")
-        self.preview_path = QLabel("Pfad: -")
+        self.preview_path = QLabel("Path: -")
         self.preview_path.setStyleSheet("color: #8f8f8f;")
         self.preview_path.setWordWrap(False)
         self.preview_path.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
@@ -1283,54 +1404,54 @@ class DoomManagerGUI(QMainWindow):
         preview_group.setLayout(preview_layout)
         right_layout.addWidget(preview_group)
         
-        # --- Mod-Auswahl Box mit Scroll-Area ---
-        mod_group = QGroupBox("Verfügbare Mods")
-        # Styling: margin-top etwas verringert, padding-top komplett entfernt
+        # Mod selection with scroll area
+        mod_group = QGroupBox("Available Mods")
+        # Compact group box styling
         mod_group.setStyleSheet("""
             QGroupBox { font-weight: bold; border: 1px solid #555; border-radius: 5px; margin-top: 8px; }
             QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #aaa; }
         """)
         
-        # Das Container-Widget
+        # Container widget
         mod_container = QWidget()
         self.mod_layout = QVBoxLayout(mod_container)
         self.mod_layout.setAlignment(Qt.AlignTop) 
-        self.mod_layout.setSpacing(2) # Checkboxen noch einen Hauch enger
-        self.mod_layout.setContentsMargins(5, 5, 5, 5) # Zwingt das innere Layout ganz an den Rand
+        self.mod_layout.setSpacing(2)
+        self.mod_layout.setContentsMargins(5, 5, 5, 5)
         
-        # Die Scroll-Area
+        # Scroll area
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setWidget(mod_container)
-        scroll_area.setFrameShape(QScrollArea.NoFrame) # Entfernt den unsichtbaren Rahmen der Scrollbox
+        scroll_area.setFrameShape(QScrollArea.NoFrame)
         scroll_area.setStyleSheet("QScrollArea { background: transparent; }")
         
-        # Scroll-Area in die GroupBox packen
+        # Place the scroll area inside the group box
         group_layout = QVBoxLayout()
-        # HIER IST DER TRICK: Nimmt der Box den Standard-Abstand nach oben (vorher ca. 15px, jetzt 8px)
+        # Reduce the top inner margin of the group box.
         group_layout.setContentsMargins(2, 8, 2, 2) 
         group_layout.addWidget(scroll_area)
         mod_group.setLayout(group_layout)
         
         right_layout.addWidget(mod_group)
         
-        # Mods in das neue Layout laden
+        # Build mod list
         self.populate_mods() 
         
-        # Abstandhalter (schiebt die Buttons nach unten)
+        # Spacer
         right_layout.addSpacing(10)
 
-        # --- Buttons & Controls ---
-        self.cb_debug = QCheckBox("🛠 Debug-Modus (Vorschau)")
+        # Aktionen
+        self.cb_debug = QCheckBox("🛠 Debug Mode (Preview)")
         self.cb_debug.setStyleSheet("color: #e67e22; font-weight: bold;")
         right_layout.addWidget(self.cb_debug)
 
-        self.btn_random = QPushButton("🎲 ZUFALLSKARTE")
+        self.btn_random = QPushButton("🎲 RANDOM MAP")
         self.btn_random.setMinimumHeight(40)
         self.btn_random.clicked.connect(self.play_random)
         right_layout.addWidget(self.btn_random)
 
-        self.btn_run = QPushButton("▶ SPIEL STARTEN")
+        self.btn_run = QPushButton("▶ START GAME")
         self.btn_run.setMinimumHeight(60)
         self.btn_run.setStyleSheet("""
             QPushButton { background-color: #27ae60; color: white; font-weight: bold; font-size: 14px; border-radius: 4px; }
@@ -1340,7 +1461,7 @@ class DoomManagerGUI(QMainWindow):
         self.btn_run.clicked.connect(self.run_selected_map)
         right_layout.addWidget(self.btn_run)
 
-        self.btn_exit = QPushButton("✖ BEENDEN")
+        self.btn_exit = QPushButton("✖ EXIT")
         self.btn_exit.setMinimumHeight(40)
         self.btn_exit.setStyleSheet("""
             QPushButton { background-color: #c0392b; color: white; font-weight: bold; font-size: 12px; border-radius: 4px; }
@@ -1352,17 +1473,14 @@ class DoomManagerGUI(QMainWindow):
 
         splitter.addWidget(right_panel)
         
-        # --- DER BREITEN-FIX ---
-        # Startet das rechte Panel auf der minimalen Breite, die das Layout zulässt.
+        # Start the right panel at its minimum width.
         min_right_width = right_panel.minimumSizeHint().width()
         left_width = max(200, self.width() - min_right_width)
         splitter.setSizes([left_width, min_right_width])
 
-        self.statusBar().showMessage("Bereit.")
+        self.statusBar().showMessage("Ready.")
 
-        # --- STATUS BAR (Ganz unten) ---
-    
-        # --- DASHBOARD PANEL ---
+        # Dashboard panel
         self.stats_panel = QFrame()
         self.stats_panel.setObjectName("Dashboard")
         self.stats_panel.setFixedHeight(35)
@@ -1371,15 +1489,15 @@ class DoomManagerGUI(QMainWindow):
         stats_layout = QHBoxLayout(self.stats_panel)
         stats_layout.setContentsMargins(15, 0, 15, 0)
 
-        # WICHTIG: Überall muss "self." davor stehen!
-        self.stat_count = QLabel("📂 KARTEN: -")
+        # Dashboard labels
+        self.stat_count = QLabel("📂 MAPS: -")
         self.stat_cleared = QLabel("✅ CLEAR: -")
         self.stat_cleared.setStyleSheet("color: #2ecc71;") 
         self.stat_favorites = QLabel("⭐ FAV: -")
         self.stat_favorites.setStyleSheet("color: #f1c40f;")
         self.stat_new = QLabel("🆕 NEW: -")
         self.stat_new.setStyleSheet("color: #3498db;")
-        self.stat_playtime = QLabel("🕒 ZEIT: -")
+        self.stat_playtime = QLabel("🕒 TIME: -")
         self.stat_engine = QLabel("⚙️ ENGINE: -")
         self.stat_view = QLabel("🔎 VIEW: -")
         self.stat_view.setStyleSheet("color: #9aa0a6;")
@@ -1389,7 +1507,7 @@ class DoomManagerGUI(QMainWindow):
             sep.setStyleSheet("color: #444;")
             return sep
 
-        # Zum Layout hinzufügen
+        # Insert dashboard into the layout
         stats_layout.addWidget(self.stat_count)
         stats_layout.addWidget(get_sep())
         stats_layout.addWidget(self.stat_cleared)
@@ -1410,13 +1528,13 @@ class DoomManagerGUI(QMainWindow):
         self.update_stats()
 
     def resizeEvent(self, event):
-        """Haelt den Pfadtext im Preview bei Fenstergroessenwechsel sauber gekuerzt."""
+        """Keep the preview path text neatly truncated when the window is resized."""
         super().resizeEvent(event)
         self._refresh_preview_title_text()
         self._refresh_preview_path_text()
 
     def on_table_item_pressed(self, item):
-        """Startet eine kurze Fuell-Animation fuer die angeklickte Karte."""
+        """Start a short fill animation for the clicked map."""
         if not item:
             return
 
@@ -1424,7 +1542,7 @@ class DoomManagerGUI(QMainWindow):
         if not map_id:
             return
 
-        # Verhindert einen direkten Doppelstart beim gleichen Klick-Ereignis.
+        # Prevent an immediate double launch from the same click event.
         if self.click_fill_timer.isActive() and self.click_fill_map_id == map_id and self.click_fill_progress < 0.18:
             return
 
@@ -1440,8 +1558,8 @@ class DoomManagerGUI(QMainWindow):
         self.table.viewport().update()
 
     def _advance_click_fill(self):
-        """Tick fuer den Fuellbalken beim Klick."""
-        self.click_fill_progress += 0.03
+        """Advance the click fill animation."""
+        self.click_fill_progress += self.CLICK_FILL_SPEED / 100.0
         if hasattr(self, "table"):
             self.table.click_fill_progress = self.click_fill_progress
             if self.click_fill_progress > 0.0:
@@ -1460,18 +1578,18 @@ class DoomManagerGUI(QMainWindow):
             self.table.viewport().update()
 
     def _set_preview_title(self, title):
-        """Setzt den vollen Titeltext und aktualisiert die sichtbare, gekuerzte Anzeige."""
-        clean_title = str(title or "Keine Karte ausgewaehlt").strip() or "Keine Karte ausgewaehlt"
+        """Set the full title text and refresh the visible truncated label."""
+        clean_title = str(title or "No map selected").strip() or "No map selected"
         self.preview_title_full_text = clean_title
         self._refresh_preview_title_text()
 
     def _refresh_preview_title_text(self):
-        """Zeigt den Titel mit Ellipse an, ohne das rechte Panel zu verbreitern."""
+        """Display the title with ellipsis without widening the right panel."""
         if not hasattr(self, "preview_title"):
             return
 
-        full_text = str(getattr(self, "preview_title_full_text", "Keine Karte ausgewaehlt") or "Keine Karte ausgewaehlt")
-        self.preview_title.setToolTip(full_text if full_text != "Keine Karte ausgewaehlt" else "")
+        full_text = str(getattr(self, "preview_title_full_text", "No map selected") or "No map selected")
+        self.preview_title.setToolTip(full_text if full_text != "No map selected" else "")
 
         metrics = QFontMetrics(self.preview_title.font())
         available_width = max(120, self.preview_title.width() - 6)
@@ -1479,18 +1597,18 @@ class DoomManagerGUI(QMainWindow):
         self.preview_title.setText(elided)
 
     def _set_preview_path(self, rel_path):
-        """Setzt den vollen Pfadtext und aktualisiert die sichtbare, gekuerzte Anzeige."""
+        """Set the full path text and refresh the visible truncated label."""
         clean_rel = str(rel_path or "-").strip() or "-"
-        self.preview_path_full_text = f"Pfad: {clean_rel}"
+        self.preview_path_full_text = f"Path: {clean_rel}"
         self._refresh_preview_path_text()
 
     def _refresh_preview_path_text(self):
-        """Zeigt den Pfad mit Ellipse an, ohne das rechte Panel zu verbreitern."""
+        """Display the path with ellipsis without widening the right panel."""
         if not hasattr(self, "preview_path"):
             return
 
-        full_text = str(getattr(self, "preview_path_full_text", "Pfad: -") or "Pfad: -")
-        self.preview_path.setToolTip(full_text if full_text != "Pfad: -" else "")
+        full_text = str(getattr(self, "preview_path_full_text", "Path: -") or "Path: -")
+        self.preview_path.setToolTip(full_text if full_text != "Path: -" else "")
 
         metrics = QFontMetrics(self.preview_path.font())
         available_width = max(120, self.preview_path.width() - 6)
@@ -1498,8 +1616,8 @@ class DoomManagerGUI(QMainWindow):
         self.preview_path.setText(elided)
 
     def populate_mods(self):
-        """Lädt alle Mods sortiert nach Kategorien und baut das Menü auf."""
-        # Kategorien definieren (Titel in der GUI : Ordnername im Dateisystem)
+        """Load all mods grouped by category and build the menu."""
+        # GUI title -> folder name
         categories = {
             "DOOM MODS": "doom",
             "HERETIC MODS": "heretic",
@@ -1512,53 +1630,53 @@ class DoomManagerGUI(QMainWindow):
         for title, folder_name in categories.items():
             mod_dir = os.path.join(cfg.BASE_DIR, "mods", folder_name)
             
-            # Überspringen, falls der Ordner gar nicht existiert
+            # Skip folders that do not exist.
             if not os.path.exists(mod_dir):
                 continue
 
-            # Finde alle Unterordner (Mods) in diesem Verzeichnis
+            # Read mod subfolders.
             mod_folders = [d for d in os.listdir(mod_dir) if os.path.isdir(os.path.join(mod_dir, d))]
 
-            # Wenn der Ordner leer ist, überspringen wir die Kategorie komplett!
+            # Skip empty categories.
             if not mod_folders:
                 continue
 
             has_any_mods = True
 
-            # 1. HEADER ERSTELLEN (Mit den perfekten Abständen)
+            # Category header
             header = QLabel(title)
             if self.mod_layout.count() == 0:
-                # Erstes Element: Kein Abstand nach oben
+                # First category without top spacing.
                 header.setStyleSheet("font-weight: bold; color: #3498db; margin-bottom: 2px;")
             else:
-                # Alle weiteren Kategorien: Etwas Abstand nach oben zur Trennung
+                # Later categories with top spacing.
                 header.setStyleSheet("font-weight: bold; color: #3498db; margin-top: 15px; margin-bottom: 2px;")
                 
             self.mod_layout.addWidget(header)
 
-            # 2. DIE CHECKBOXEN ERSTELLEN (Die waren vorher verschwunden!)
+            # Mod checkboxes
             for mod in sorted(mod_folders):
                 cb = QCheckBox(mod)
                 
-                # Wir speichern den genauen, absoluten Pfad unsichtbar in der Checkbox
+                # Store the absolute mod path as a property.
                 full_path = os.path.join(mod_dir, mod)
                 cb.setProperty("mod_path", full_path)
                 
                 self.mod_layout.addWidget(cb)
 
-        # Fallback, falls absolut gar keine Mods installiert sind
+        # Fallback for no installed mods.
         if not has_any_mods:
-            lbl_empty = QLabel("Keine Mods installiert.")
+            lbl_empty = QLabel("No mods installed.")
             lbl_empty.setStyleSheet("color: gray; font-style: italic;")
             self.mod_layout.addWidget(lbl_empty)
 
     def load_data(self):
-        """Liest die Daten aus der Datenbank.""" 
+        """Load data from the database."""
         import dms_core.database as db
         self.all_maps_data = db.get_all_maps()
 
     def _filter_maps(self, maps):
-        """Filtert Karten anhand Suchfeld und Quick-Filter."""
+        """Filter maps using the search field and quick filter."""
         if not hasattr(self, "map_search_input"):
             return maps
 
@@ -1618,7 +1736,7 @@ class DoomManagerGUI(QMainWindow):
         return filtered
 
     def _extract_sort_fields(self, m):
-        """Extrahiert robuste Sortierfelder für Dict- und Listen-Daten."""
+        """Extract robust sort fields from dict and list-based map data."""
         if isinstance(m, dict):
             return {
                 "id": str(m.get("ID", "")).strip().upper(),
@@ -1635,7 +1753,7 @@ class DoomManagerGUI(QMainWindow):
         }
 
     def _parse_last_played(self, value):
-        """Parst LastPlayed robust; leere Werte werden als sehr alt behandelt."""
+        """Parse LastPlayed robustly; empty values are treated as very old."""
         txt = str(value or "").strip()
         if not txt or txt == "-":
             return datetime.min
@@ -1645,7 +1763,7 @@ class DoomManagerGUI(QMainWindow):
             return datetime.min
 
     def _apply_sort(self, maps):
-        """Sortiert die gefilterte Kartenliste entsprechend der aktiven Auswahl."""
+        """Sort the filtered map list according to the active selection."""
         mode = str(getattr(self, "sort_mode", "insert") or "insert")
         items = list(maps)
 
@@ -1662,7 +1780,7 @@ class DoomManagerGUI(QMainWindow):
         return items
 
     def on_sort_mode_changed(self, _index=None):
-        """Speichert die Sortier-Auswahl und aktualisiert die Tabelle."""
+        """Save the selected sort mode and refresh the table."""
         if not hasattr(self, "cmb_sort"):
             return
         self.sort_mode = str(self.cmb_sort.currentData() or "insert")
@@ -1670,7 +1788,7 @@ class DoomManagerGUI(QMainWindow):
         self.refresh_data()
 
     def set_quick_filter(self, filter_key, persist=True):
-        """Aktiviert einen Quick-Filter-Chip und refresh't die Liste."""
+        """Activate a quick filter chip and refresh the list."""
         key = str(filter_key or "ALLE").upper()
         if key not in getattr(self, "quick_filter_buttons", {}):
             key = "ALLE"
@@ -1684,17 +1802,17 @@ class DoomManagerGUI(QMainWindow):
         self.refresh_data()
 
     def get_checked_mods(self):
-        """Durchsucht das Mod-Layout und gibt eine Liste der markierten Mod-Pfade zurück."""
+        """Scan the mod layout and return a list of checked mod paths."""
         selected_mods = []
         
-        # Gehe alle Elemente im mod_layout durch (Header Labels UND Checkboxen)
+        # Inspect all widgets in the mod layout.
         for i in range(self.mod_layout.count()):
             widget = self.mod_layout.itemAt(i).widget()
             
-            # Ignoriert die Header-Labels automatisch, weil wir nur nach QCheckBox fragen
+            # Only process checked checkboxes.
             if isinstance(widget, QCheckBox) and widget.isChecked():
                 
-                # Wir holen uns den unsichtbar gespeicherten Pfad
+                # Read the stored mod path.
                 mod_path = widget.property("mod_path")
                 
                 if mod_path:
@@ -1704,66 +1822,66 @@ class DoomManagerGUI(QMainWindow):
 
     @tracker
     def run_selected_map(self, item=None):
-        """Startet die gewählte Karte mit Berücksichtigung von Mod-Sperren und Debug-Modus."""
-        # 1. Zelle ermitteln (Entweder übergebenes Item oder aktuell markierte Zelle)
+        """Start the selected map while respecting mod locks and debug mode."""
+        # Determine the target cell.
         cell = item if item else self.table.currentItem()
         if not cell:
-            QMessageBox.warning(self, "Abbruch", "Bitte wähle erst eine Karte aus der Liste aus!")
+            QMessageBox.warning(self, "Cancelled", "Please select a map from the list first.")
             return
 
-        # 2. ID und Kartendaten laden
+        # Load map ID and data.
         mid = cell.data(Qt.UserRole)
         if not mid:
-            QMessageBox.warning(self, "Fehler", "Konnte die ID der Karte nicht erkennen.")
+            QMessageBox.warning(self, "Error", "Could not determine the selected map ID.")
             return
 
         map_data = db.get_map_by_id(mid)
         if not map_data:
-            QMessageBox.critical(self, "Fehler", "Daten zur Karte konnten nicht geladen werden.")
+            QMessageBox.critical(self, "Error", "Could not load the map data.")
             return
 
-        # 3. Engine-Check (Live-Abfrage aus der Config statt alter Variable)
+        # Check the active engine.
         active_engine_name = cfg.get_current_engine()
         
         if not active_engine_name:
-            QMessageBox.critical(self, "Fehler", "Keine Engine ausgewählt! Geh in den Engine-Manager und aktiviere einen Port.")
+            QMessageBox.critical(self, "Error", "No engine selected. Open Engine Manager and activate a port first.")
             return
 
-        # Pfad zur Engine-EXE dynamisch bauen (Engines/[Name]/[Name].exe)
+        # Build the engine EXE path.
         engine_path = os.path.join(cfg.ENGINE_BASE_DIR, active_engine_name, f"{active_engine_name}.exe")
         
         if not os.path.exists(engine_path):
-            QMessageBox.critical(self, "Fehler", f"Die Engine-Datei wurde nicht gefunden:\n{engine_path}")
+            QMessageBox.critical(self, "Error", f"Engine executable not found:\n{engine_path}")
             return
 
         try:
-            # 4. Mods verarbeiten
+            # Read selected mods.
             selected_mods = self.get_checked_mods()
             
-            # Prüfung der Mod-Sperre
+            # Evaluate mod lock state.
             is_mod_locked = str(map_data.get('NoMods', '0')) == "1"
             if is_mod_locked:
-                print(f"🚫 MOD-SPERRE AKTIV für {map_data.get('Name')}")
+                print(f"🚫 MOD LOCK ACTIVE for {map_data.get('Name')}")
                 selected_mods = []
 
-            # 5. Start-Kommando generieren (über den Runner)
+            # Build the start command.
             debug_info = runner.get_start_command(engine_path, map_data, selected_mods)
             
-            # 6. Optionales Debug-Menü
+            # Optional debug dialog.
             if self.cb_debug.isChecked():
                 cmd_str = ' '.join(debug_info.get('cmd', []))
                 
-                # Status-Anzeige für das Debug-Fenster
+                # Mod status for debug output.
                 mod_status_text = (
-                    "<span style='color: #e74c3c;'>DEAKTIVIERT (Mod-Sperre aktiv)</span>" 
-                    if is_mod_locked else f"<span style='color: #2ecc71;'>{len(selected_mods)} geladen</span>"
+                    "<span style='color: #e74c3c;'>DISABLED (mod lock active)</span>"
+                    if is_mod_locked else f"<span style='color: #2ecc71;'>{len(selected_mods)} loaded</span>"
                 )
                 
                 debug_msg = (
                     f"<b>ENGINE:</b><br>{active_engine_name}<br><br>"
-                    f"<b>BEFEHL (CMD):</b><br><code style='color: #2ecc71;'>{cmd_str}</code><br><br>"
-                    f"<b>MOD-STATUS:</b> {mod_status_text}<br><br>"
-                    f"<b>DEINE PARAMETER (ARGS):</b><br><span style='color: #e74c3c;'>{map_data.get('ARGS', '-')}</span>"
+                    f"<b>COMMAND (CMD):</b><br><code style='color: #2ecc71;'>{cmd_str}</code><br><br>"
+                    f"<b>MOD STATUS:</b> {mod_status_text}<br><br>"
+                    f"<b>YOUR PARAMETERS (ARGS):</b><br><span style='color: #e74c3c;'>{map_data.get('ARGS', '-')}</span>"
                 )
                 
                 msg_box = QMessageBox(self)
@@ -1771,48 +1889,48 @@ class DoomManagerGUI(QMainWindow):
                 msg_box.setTextFormat(Qt.TextFormat.RichText)
                 msg_box.setText(debug_msg)
                 msg_box.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
-                msg_box.button(QMessageBox.StandardButton.Ok).setText("Starten")
+                msg_box.button(QMessageBox.StandardButton.Ok).setText("Start")
                 
                 if msg_box.exec() == QMessageBox.StandardButton.Cancel:
                     return
 
-            # 7. Spiel tatsächlich ausführen
-            print(f"🚀 Starte Spiel: {map_data.get('Name')} mit Engine: {active_engine_name}...")
+            # Start the game.
+            print(f"🚀 Starting game: {map_data.get('Name')} with engine: {active_engine_name}...")
             success = runner.run_game(engine_path, map_data, selected_mods)
 
             if success:
                 self.update_stats()
             else:
-                QMessageBox.warning(self, "Start fehlgeschlagen", "Das Spiel konnte nicht gestartet werden. Prüfe die Konsole/Logs.")
+                QMessageBox.warning(self, "Launch Failed", "The game could not be started. Check the console/logs.")
 
         except Exception as e:
             print(f"❌ CRASH in run_selected_map: {e}")
             import traceback
             traceback.print_exc()
-            QMessageBox.critical(self, "Crash", f"Fehler beim Startversuch:\n{str(e)}")
+            QMessageBox.critical(self, "Crash", f"Error during launch attempt:\n{str(e)}")
 
     def show_context_menu(self, pos):
-        """Erstellt ein sauberes Rechtsklick-Menü ohne Geister-Effekte."""
+        """Create a clean right-click menu without ghost effects."""
         item = self.table.itemAt(pos)
         if not item: return
         
         mid = item.data(Qt.UserRole)
         if not mid: return
 
-        # 1. Ein frisches, leeres Menü erstellen
+        # Create context menu.
         menu = QMenu(self.table)
         
-        # 2. Exakt 4 Aktionen hinzufügen (OHNE triggered.connect!)
+        # Define actions.
         act_clear = menu.addAction("✔ Map Clear")
         act_mod   = menu.addAction("🅼 Skip Mods")
         menu.addSeparator()
-        act_args  = menu.addAction("🛠 Parameter bearbeiten (ARGS)")
-        act_del   = menu.addAction("🗑 Map löschen")
+        act_args  = menu.addAction("🛠 Edit Parameters (ARGS)")
+        act_del   = menu.addAction("🗑 Delete Map")
 
-        # 3. Menü anzeigen und warten, bis der User klickt.
+        # Show the menu and read the selection.
         action = menu.exec(self.table.mapToGlobal(pos))
 
-        # 4. ERST JETZT, wo das Menü sicher zu ist, führen wir die Befehle aus:
+        # Process the selection.
         if action == act_clear:
             db.toggle_map_clear(mid)
             self.refresh_data()
@@ -1822,10 +1940,10 @@ class DoomManagerGUI(QMainWindow):
             self.refresh_data()
             
         elif action == act_args:
-            # Hier rufen wir deine Parameter-Funktion auf
+            # Use the existing parameter editing function.
             if hasattr(self, 'edit_map_args'):
                 self.edit_map_args(mid)
-            elif hasattr(self, 'edit_args'): # Falls sie bei dir anders heißt
+            elif hasattr(self, 'edit_args'):
                 self.edit_args(mid)
                 
         elif action == act_del:
@@ -1833,7 +1951,7 @@ class DoomManagerGUI(QMainWindow):
 
     def edit_map_parameters(self, row=None):
         
-        # Die exakt angeklickte Zelle holen
+        # Read the current cell.
         current_cell = self.table.currentItem()
         if not current_cell: 
             return
@@ -1845,42 +1963,42 @@ class DoomManagerGUI(QMainWindow):
         map_data = db.get_map_by_id(map_id)
         selected_mods = self.get_checked_mods()
         
-        # Prüfen, ob die Mod-Sperre auf '1' steht
+        # Check the mod lock.
         if str(map_data.get('NoMods', '0')) == "1":
-            print("🚫 MOD-SPERRE: Starte ohne Mods.")
+            print("🚫 MOD LOCK: Starting without mods.")
             selected_mods = []
         if not map_data:
             return
             
         current_args = map_data.get('ARGS', '')
-        map_name = map_data.get('Name', 'Unbekannt')
+        map_name = map_data.get('Name', 'Unknown')
 
-        # Eingabedialog öffnen
+        # Show the ARGS dialog.
         new_args, ok = QInputDialog.getText(
-            self, "Parameter definieren", 
-            f"Zusätzliche Start-Parameter für '{map_name}':",
+            self, "Set Parameters",
+            f"Additional launch parameters for '{map_name}':",
             QLineEdit.EchoMode.Normal, current_args
         )
 
         if ok:
             if hasattr(db, 'update_map_args'):
                 db.update_map_args(map_id, new_args)
-                QMessageBox.information(self, "Gespeichert", f"Parameter wurden aktualisiert:\n{new_args}")
+                QMessageBox.information(self, "Saved", f"Parameters updated:\n{new_args}")
                 self.refresh_data()
             else:
-                QMessageBox.warning(self, "Fehler", "Die Speicherfunktion fehlt in database.py!")
+                QMessageBox.warning(self, "Error", "The save function is missing in database.py.")
 
     def create_item(self, m):
-            # 1. Ist die Zelle komplett leer? -> Unsichtbarer Button
+            # Create an empty non-selectable cell.
             if not m: 
                 item = QTableWidgetItem("")
                 item.setFlags(Qt.ItemFlag.NoItemFlags) 
                 return item
             
-            # 2. Daten flexibel auslesen (Zweisprachig: Dictionary & Liste)
+            # Read data from dict or list format.
             try:
                 if isinstance(m, dict) or hasattr(m, "keys"):
-                    # Wenn die Daten als Dictionary kommen (Neues System)
+                    # Dict format
                     c_flag = str(m.get("Cleared", "0")).strip()
                     m_flag = str(m.get("NoMods", "0")).strip()
                     mid    = str(m.get("ID", "")).strip().upper()
@@ -1889,7 +2007,7 @@ class DoomManagerGUI(QMainWindow):
                     f_flag = str(m.get("Favorite", "0")).strip()
                     n_flag = "1" if self._is_recent_install(mid) else "0"
                 else:
-                    # Wenn die Daten als Liste kommen (Altes System)
+                    # List format
                     if len(m) < 4:
                         raise ValueError("Zu wenig Daten")
                     c_flag = str(m[0]).strip()
@@ -1900,18 +2018,18 @@ class DoomManagerGUI(QMainWindow):
                     f_flag = str(m[12]).strip() if len(m) > 12 else "0"
                     n_flag = "1" if self._is_recent_install(mid) else "0"
             except (KeyError, IndexError, ValueError):
-                # Falls eine Trennzeile verarbeitet wird -> Unsichtbar machen
+                # Treat invalid data as an empty row.
                 item = QTableWidgetItem("")
                 item.setFlags(Qt.ItemFlag.NoItemFlags) 
                 return item
 
-            # Letzter Check: Wenn keine ID da ist -> Unsichtbar
+            # Without an ID the cell must not be selectable.
             if not mid:
                 item = QTableWidgetItem("")
                 item.setFlags(Qt.ItemFlag.NoItemFlags) 
                 return item
 
-            # Name als reinen Text (Delegate übernimmt Badges + Farben)
+            # Text only; badges are rendered by the delegate.
             display = name if name and name != "-" else mid
 
             item = QTableWidgetItem(display)
@@ -1921,7 +2039,7 @@ class DoomManagerGUI(QMainWindow):
             return item
 
     def _set_preview_tag_style(self, iwad, category):
-        """Farbcode je Spieltyp im Preview."""
+        """Apply a color code by game type in the preview."""
         iwad_l = str(iwad or "").lower()
         cat_u = str(category or "").upper()
 
@@ -1940,7 +2058,7 @@ class DoomManagerGUI(QMainWindow):
         self.preview_tag.setStyleSheet(f"background-color: {bg}; color: #ffffff; border-radius: 10px; font-size: 11px; font-weight: bold; padding: 0 8px;")
 
     def update_map_preview(self):
-        """Aktualisiert das Preview-Panel anhand der aktuell ausgewaehlten Karte."""
+        """Update the preview panel based on the currently selected map."""
         if not hasattr(self, "preview_title"):
             return
 
@@ -1958,10 +2076,10 @@ class DoomManagerGUI(QMainWindow):
                 target_item = current
 
         if not target_item:
-            self._set_preview_title("Keine Karte ausgewaehlt")
+            self._set_preview_title("No map selected")
             self.preview_tag.setText("-")
             self.preview_tag.setStyleSheet("background-color: #3a3a3a; color: #dcdcdc; border-radius: 10px; font-size: 11px; padding: 0 8px;")
-            self.preview_meta.setText("ID: - | IWAD: -\nKategorie: -")
+            self.preview_meta.setText("ID: -\nIWAD: -\nCategory: -")
             self.preview_play.setText("Playtime: 0 min\nLast Played: -")
             self._set_preview_path("-")
             return
@@ -1980,36 +2098,36 @@ class DoomManagerGUI(QMainWindow):
 
         self._set_preview_title(name)
         self._set_preview_tag_style(iwad, kategorie)
-        self.preview_meta.setText(f"ID: {map_id} | IWAD: {iwad}\nKategorie: {kategorie}")
+        self.preview_meta.setText(f"ID: {map_id}\nIWAD: {iwad}\nCategory: {kategorie}")
         self.preview_play.setText(f"Playtime: {playtime} min\nLast Played: {last_played}")
         self._set_preview_path(rel_path)
 
     def refresh_data(self):
-        """Aktualisiert die Kartentabelle mit den Daten aus der Datenbank."""
+        """Refresh the map table using database data."""
         self.load_data()
         
         try:
-            # 1. Daten aus der Datenbank holen
+            # Load, filter, and sort data.
             all_m = db.get_all_maps()
             all_m = self._filter_maps(all_m)
             all_m = self._apply_sort(all_m)
             
-            # 2. Karten verteilen & sortieren
+            # Prepare target columns.
             blocks = {1: [], 2: [], 3: [], 4: [], 5: []}
             doom_maps = []
             
-            # Listen für die Extras (Spalte 5)
+            # Group the extra column by game.
             heretic_maps = []
             hexen_maps = []
             strife_maps = []
             extra_misc_maps = []
 
             for m in all_m:
-                # IWAD sicher auslesen (Zweisprachig für Dict & Liste)
+                # Read IWAD/category robustly.
                 iwad = str(m.get("IWAD", "")).lower() if isinstance(m, dict) else str(m[4]).lower()
                 kat = str(m.get("Kategorie", "PWAD")).upper() if isinstance(m, dict) else str(m[8]).upper()
 
-                # Kategorie EXTRA immer in Spalte 5 halten
+                # EXTRA category always goes in column 5.
                 if kat == "EXTRA":
                     if "heretic" in iwad:
                         heretic_maps.append(m)
@@ -2021,7 +2139,7 @@ class DoomManagerGUI(QMainWindow):
                         extra_misc_maps.append(m)
                     continue
                 
-                # Fein-Sortierung für Spalte 5 (Extras)
+                # Group game types into column 5.
                 if "heretic" in iwad:
                     heretic_maps.append(m)
                 elif "hexen" in iwad:
@@ -2029,21 +2147,21 @@ class DoomManagerGUI(QMainWindow):
                 elif "strife" in iwad:
                     strife_maps.append(m)
                 else:
-                    # Alles andere (Doom 1, Doom 2, Plutonia, TNT) ist DOOM
+                    # Treat the rest as DOOM.
                     doom_maps.append(m)
 
-            # --- SPALTE 5 ZUSAMMENBAUEN (MIT UNSICHTBAREN LÜCKEN) ---
+            # Build column 5 with separator rows.
             if heretic_maps:
                 blocks[5].extend(heretic_maps)
                 
             if hexen_maps:
-                # Fügt eine leere Liste [] als Platzhalter ein, falls schon Heretic-Karten da sind
+                # Separator row between groups.
                 if blocks[5]: 
                     blocks[5].append([]) 
                 blocks[5].extend(hexen_maps)
                 
             if strife_maps:
-                # Fügt noch eine Lücke ein, falls es Strife gibt und vorher schon Karten da sind
+                # Separator row between groups.
                 if blocks[5]:
                     blocks[5].append([])
                 blocks[5].extend(strife_maps)
@@ -2052,20 +2170,18 @@ class DoomManagerGUI(QMainWindow):
                 if blocks[5]:
                     blocks[5].append([])
                 blocks[5].extend(extra_misc_maps)
-            # --------------------------------------------------------
-
-            # Doom-Karten fair auf Spalte 1, 2, 3 und 4 aufteilen
+            # Distribute DOOM maps across columns 1 to 4.
             per_col = (len(doom_maps) + 3) // 4
             blocks[1] = doom_maps[:per_col]
             blocks[2] = doom_maps[per_col:per_col * 2]
             blocks[3] = doom_maps[per_col * 2:per_col * 3]
             blocks[4] = doom_maps[per_col * 3:]
 
-            # 3. Maximale Zeilen berechnen
+            # Determine row count.
             max_rows = max(len(blocks[1]), len(blocks[2]), len(blocks[3]), len(blocks[4]), len(blocks[5]))
             self.table.setRowCount(max_rows)
 
-            # 4. Tabelle füllen
+            # Fill the table.
             for i in range(max_rows):
                 item1 = self.create_item(blocks[1][i]) if i < len(blocks[1]) else self.create_item([])
                 item2 = self.create_item(blocks[2][i]) if i < len(blocks[2]) else self.create_item([])
@@ -2080,16 +2196,16 @@ class DoomManagerGUI(QMainWindow):
                 self.table.setItem(i, 4, item5)
 
         except Exception as e:
-            print(f"Fehler beim Laden der Tabelle: {e}")
+            print(f"Error while loading the table: {e}")
 
-        # Falls eine neue/gezielte Map markiert werden soll: jetzt in der Tabelle fokussieren.
+        # Focus an optionally queued target map.
         if self.pending_focus_map_id:
             target_id = self.pending_focus_map_id
             self.pending_focus_map_id = None
             if self._focus_map_in_table(target_id):
-                self.statusBar().showMessage(f"Neue Karte gefunden: {target_id}", 7000)
+                self.statusBar().showMessage(f"New map found: {target_id}", 7000)
             else:
-                self.statusBar().showMessage(f"Karte {target_id} wurde installiert, aber nicht direkt gefunden.", 7000)
+                self.statusBar().showMessage(f"Map {target_id} was installed, but it could not be focused directly.", 7000)
 
         if hasattr(self, "preview_title"):
             self.update_map_preview()
@@ -2097,7 +2213,7 @@ class DoomManagerGUI(QMainWindow):
         self.update_stats()
 
     def update_stats(self):
-        """Dashboard-Update (0/1 System)."""
+        """Update the dashboard using the 0/1 flag system."""
         try:
             all_m = db.get_all_maps()
             total = len(all_m)
@@ -2107,7 +2223,7 @@ class DoomManagerGUI(QMainWindow):
             clear_percent = int((cleared / total) * 100) if total > 0 else 0
             
             if hasattr(self, 'stat_count'):
-                self.stat_count.setText(f"📂 KARTEN: {total}")
+                self.stat_count.setText(f"📂 MAPS: {total}")
                 self.stat_cleared.setText(f"✅ CLEAR: {cleared} ({clear_percent}%)")
                 self.stat_favorites.setText(f"⭐ FAV: {favorites}")
                 self.stat_new.setText(f"🆕 NEW: {new_count}")
@@ -2115,55 +2231,56 @@ class DoomManagerGUI(QMainWindow):
                 total_sec = db.get_total_seconds()
                 h, r = divmod(int(total_sec), 3600)
                 m, _ = divmod(r, 60)
-                self.stat_playtime.setText(f"🕒 ZEIT: {h}H {m}M")
+                self.stat_playtime.setText(f"🕒 TIME: {h}H {m}M")
                 
                 eng = str(cfg.CURRENT_ENGINE).upper() if cfg.CURRENT_ENGINE else "NONE"
                 self.stat_engine.setText(f"⚙️ ENGINE: {eng}")
 
                 needle = self.map_search_input.text().strip() if hasattr(self, "map_search_input") else ""
                 filter_name = str(getattr(self, "quick_filter", "ALLE") or "ALLE")
+                filter_name = {"ALLE": "ALL", "FAVORIT": "FAVORITES", "NOMODS": "MOD LOCKED"}.get(filter_name, filter_name)
                 if needle:
-                    self.stat_view.setText(f"🔎 VIEW: {filter_name} | Suche: {needle}")
+                    self.stat_view.setText(f"🔎 VIEW: {filter_name} | Search: {needle}")
                 else:
                     self.stat_view.setText(f"🔎 VIEW: {filter_name}")
         except Exception as e:
-            print(f"❌ Statistik-Fehler: {e}")
+            print(f"❌ Stats error: {e}")
 
     def get_selected_id(self):
-        """Holt die versteckte ID aus der aktuell gewählten Zelle."""
+        """Return the hidden ID from the currently selected cell."""
         item = self.table.currentItem()
         if item:
             return item.data(Qt.UserRole)
         return None
 
     def on_cell_double_clicked(self, row, column):
-        """Startet das Spiel bei Doppelklick auf eine Zelle."""
+        """Start the game when a cell is double-clicked."""
         map_id = self.get_selected_id()
         if map_id:
             self.run_game(map_id)
 
 # ============================================================================
-# KERN-FUNKTIONEN (SPIELEN & INSTALLIEREN)
+# Core functions (play and install)
 # ============================================================================
 
     def run_game(self, map_id):
-        """Legacy-Wrapper: startet eine Map per ID mit der aktuellen Runner-API."""
+        """Legacy wrapper: start a map by ID using the current runner API."""
         if not map_id:
             return
 
         map_data = db.get_map_by_id(map_id)
         if not map_data:
-            QMessageBox.warning(self, "Fehler", f"Karte {map_id} wurde nicht gefunden.")
+            QMessageBox.warning(self, "Error", f"Map {map_id} was not found.")
             return
 
         active_engine_name = cfg.get_current_engine()
         if not active_engine_name:
-            QMessageBox.critical(self, "Fehler", "Keine Engine ausgewählt! Geh in den Engine-Manager und aktiviere einen Port.")
+            QMessageBox.critical(self, "Error", "No engine selected. Open Engine Manager and activate a port first.")
             return
 
         engine_path = os.path.join(cfg.ENGINE_BASE_DIR, active_engine_name, f"{active_engine_name}.exe")
         if not os.path.exists(engine_path):
-            QMessageBox.critical(self, "Fehler", f"Die Engine-Datei wurde nicht gefunden:\n{engine_path}")
+            QMessageBox.critical(self, "Error", f"Engine executable not found:\n{engine_path}")
             return
 
         selected_mods = self.get_checked_mods()
@@ -2171,18 +2288,17 @@ class DoomManagerGUI(QMainWindow):
             selected_mods = []
 
         try:
-            self.statusBar().showMessage(f"Starte {map_data.get('Name', map_id)}...")
+            self.statusBar().showMessage(f"Starting {map_data.get('Name', map_id)}...")
             success = runner.run_game(engine_path, map_data, selected_mods)
             if success:
                 self.refresh_data()
             else:
-                QMessageBox.warning(self, "Start fehlgeschlagen", "Das Spiel konnte nicht gestartet werden. Prüfe die Konsole/Logs.")
+                QMessageBox.warning(self, "Launch Failed", "The game could not be started. Check the console/logs.")
         except Exception as e:
-            QMessageBox.critical(self, "Kritischer Fehler", f"Fehler im Ablauf:\n{str(e)}")
+            QMessageBox.critical(self, "Critical Error", f"Workflow error:\n{str(e)}")
                 
     def run_installer(self):
-        """Installiert Doomworld-Download oder importiert lokale Dateien aus Install/."""
-        before_ids = {str(m.get("ID", "")).strip().upper() for m in db.get_all_maps() if m.get("ID")}
+        """Install a Doomworld download or import local files from Install/."""
         selected_row = self.table.currentRow()
         
         if selected_row >= 0:
@@ -2190,8 +2306,9 @@ class DoomManagerGUI(QMainWindow):
             map_data = item.data(Qt.UserRole)
             
             if map_data and isinstance(map_data, dict):
-                # Download/Install von Doomworld
+                # Doomworld download/install
                 title = map_data.get('title', 'Unbekannt')
+                before_ids = self._capture_map_ids()
 
                 # Progress popup so user knows the download started
                 wait_dlg = QDialog(self)
@@ -2213,32 +2330,54 @@ class DoomManagerGUI(QMainWindow):
                 success, _ = api.download_idgames_gui(map_data, callback=_update)
                 wait_dlg.close()
                 if success:
+                    self._mark_new_maps_from_diff(before_ids)
                     self.refresh_data()
-                    QMessageBox.information(self, "Erfolg", f"'{title}' installiert!")
-                return # Beenden
+                    QMessageBox.information(self, "Success", f"'{title}' installed.")
+                return
 
-        # 2. Wenn nichts ausgewählt ist: Automatisch den INSTALL-Ordner scannen!
-        self.statusBar().showMessage("Scanne 'Install'-Ordner nach neuen Karten...")
-        
-        # Aufruf der neuen Funktion ohne Browser-Fenster!
+        self.run_install_scan(show_empty_message=True, auto_mode=False)
+
+    def run_install_scan(self, show_empty_message=True, auto_mode=False):
+        """Import all compatible files from Install/ with optional user confirmation."""
+        candidates = installer.get_install_candidates()
+        if not candidates:
+            if show_empty_message:
+                self.statusBar().showMessage("No new files were found in the 'Install' folder.", 6000)
+            return 0
+
+        if not auto_mode:
+            reply = QMessageBox.question(
+                self,
+                "Install Folder Scan",
+                f"Found {len(candidates)} importable file(s) in Install/.\nStart import now?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if reply != QMessageBox.Yes:
+                return 0
+
+        before_ids = self._capture_map_ids()
+        self.statusBar().showMessage("Scanning the 'Install' folder for new maps...")
+
         count = installer.install_from_folder(
             callback=lambda m: self.statusBar().showMessage(m),
             resolve_game=self.prompt_install_game_profile,
         )
-        
+
         if count > 0:
-            after_ids = {str(m.get("ID", "")).strip().upper() for m in db.get_all_maps() if m.get("ID")}
-            new_ids = sorted(after_ids - before_ids, key=self._sort_map_id_key)
-            if new_ids:
-                self.mark_maps_as_new(new_ids)
-                self.set_pending_focus_map(new_ids[-1])
+            self._mark_new_maps_from_diff(before_ids)
             self.refresh_data()
-            QMessageBox.information(self, "Auto-Installer", f"{count} Karte(n) erfolgreich aus dem Install-Ordner importiert!")
-        else:
-            self.statusBar().showMessage("Keine neuen Dateien im 'Install'-Ordner gefunden.")
+            if auto_mode:
+                self.statusBar().showMessage(f"Startup scan imported {count} map(s) from Install/.", 7000)
+            else:
+                QMessageBox.information(self, "Auto Installer", f"Successfully imported {count} map(s) from the Install folder.")
+        elif show_empty_message and not auto_mode:
+            self.statusBar().showMessage("No new files were found in the 'Install' folder.", 6000)
+
+        return count
 
     def prompt_install_game_profile(self, file_path):
-        """Fallback-Dialog: Fragt nach dem Hauptspiel, wenn keine TXT-IWAD-Info gefunden wurde."""
+        """Fallback dialog: ask for the base game when no TXT IWAD info is found."""
         fname = os.path.basename(str(file_path))
         options = [
             "DOOM (doom.wad)",
@@ -2249,8 +2388,8 @@ class DoomManagerGUI(QMainWindow):
 
         selected, ok = QInputDialog.getItem(
             self,
-            "Hauptspiel wählen",
-            f"Keine TXT-IWAD-Info gefunden für:\n{fname}\n\nFür welches Hauptspiel ist diese Erweiterung?",
+            "Choose Base Game",
+            f"No TXT-based IWAD info was found for:\n{fname}\n\nWhich base game is this add-on for?",
             options,
             1,
             False,
@@ -2268,18 +2407,18 @@ class DoomManagerGUI(QMainWindow):
         return mapping.get(selected)
 
     def add_map_manually(self):
-        """Fügt eine Karte manuell in die Datenbank ein."""
-        title, ok = QInputDialog.getText(self, "Karte manuell hinzufügen", "Kartenname:")
+        """Add a map manually to the database."""
+        title, ok = QInputDialog.getText(self, "Add Map Manually", "Map name:")
         if not ok:
             return
 
         title = str(title).strip()
         if not title:
-            QMessageBox.warning(self, "Eingabe fehlt", "Bitte einen Kartennamen angeben.")
+            QMessageBox.warning(self, "Missing Input", "Please enter a map name.")
             return
 
         game_options = ["DOOM", "HERETIC", "HEXEN", "WOLF", "EXTRA"]
-        game, ok = QInputDialog.getItem(self, "Spiel-Profil", "Profil für ID-Generator:", game_options, 0, False)
+        game, ok = QInputDialog.getItem(self, "Game Profile", "Profile for ID generation:", game_options, 0, False)
         if not ok:
             return
 
@@ -2291,34 +2430,34 @@ class DoomManagerGUI(QMainWindow):
             "EXTRA": "doom.wad",
         }
         iwad_default = iwad_defaults.get(game, "doom2.wad")
-        iwad, ok = QInputDialog.getText(self, "IWAD", "IWAD-Datei (z.B. doom2.wad):", text=iwad_default)
+        iwad, ok = QInputDialog.getText(self, "IWAD", "IWAD file (for example doom2.wad):", text=iwad_default)
         if not ok:
             return
 
         iwad = str(iwad).strip()
         if not iwad:
-            QMessageBox.warning(self, "Eingabe fehlt", "Bitte eine IWAD angeben.")
+            QMessageBox.warning(self, "Missing Input", "Please enter an IWAD.")
             return
 
         path_rel, ok = QInputDialog.getText(
             self,
-            "PWAD-Pfad",
-            "Pfad unter pwad (Ordnername oder Datei):",
+            "PWAD Path",
+            "Path under pwad (folder name or file):",
         )
         if not ok:
             return
 
         path_rel = str(path_rel).strip()
         if not path_rel:
-            QMessageBox.warning(self, "Eingabe fehlt", "Bitte einen Pfad unter pwad angeben.")
+            QMessageBox.warning(self, "Missing Input", "Please enter a path under pwad.")
             return
 
         kategorie_options = ["PWAD", "EXTRA", "IWAD"]
-        kategorie, ok = QInputDialog.getItem(self, "Kategorie", "Kategorie wählen:", kategorie_options, 0, False)
+        kategorie, ok = QInputDialog.getItem(self, "Category", "Choose category:", kategorie_options, 0, False)
         if not ok:
             return
 
-        args, ok = QInputDialog.getText(self, "Startparameter", "Optionale ARGS (leer lassen für keine):", text="0")
+        args, ok = QInputDialog.getText(self, "Launch Parameters", "Optional ARGS (leave empty for none):", text="0")
         if not ok:
             return
         args = str(args).strip() or "0"
@@ -2328,7 +2467,7 @@ class DoomManagerGUI(QMainWindow):
             prefix = "WOLF"
         new_id = db.get_next_id(prefix=prefix)
 
-        custom_id, ok = QInputDialog.getText(self, "Map-ID", "ID (leer = automatisch):", text=new_id)
+        custom_id, ok = QInputDialog.getText(self, "Map ID", "ID (leave empty = automatic):", text=new_id)
         if not ok:
             return
         custom_id = str(custom_id).strip().upper() or new_id
@@ -2352,12 +2491,12 @@ class DoomManagerGUI(QMainWindow):
         if db.insert_map(map_data):
             self.set_pending_focus_map(custom_id)
             self.refresh_data()
-            QMessageBox.information(self, "Erfolg", f"Karte '{title}' wurde als {custom_id} hinzugefügt.")
+            QMessageBox.information(self, "Success", f"Map '{title}' was added as {custom_id}.")
         else:
-            QMessageBox.warning(self, "Fehler", "Karte konnte nicht hinzugefügt werden. Prüfe, ob die ID bereits existiert.")
+            QMessageBox.warning(self, "Error", "The map could not be added. Check whether the ID already exists.")
 
     def play_random(self):
-        """Wird aufgerufen, wenn man auf 'ZUFALL' klickt."""
+        """Called when the random button is pressed."""
         visible_map_ids = []
 
         for row in range(self.table.rowCount()):
@@ -2371,7 +2510,7 @@ class DoomManagerGUI(QMainWindow):
                     visible_map_ids.append((map_id, item))
 
         if not visible_map_ids:
-            QMessageBox.information(self, "Keine Karte", "Aktuell ist keine sichtbare Karte fuer Zufall verfuegbar.")
+            QMessageBox.information(self, "No Map Available", "There is currently no visible map available for random selection.")
             return
 
         selected_map_id, selected_item = random.choice(visible_map_ids)
@@ -2381,22 +2520,22 @@ class DoomManagerGUI(QMainWindow):
         self.run_game(selected_map_id)
 
     def check_updates(self):
-        """Prüft im Hintergrund auf Launcher-Updates."""
+        """Check for launcher updates in the background."""
         update_info = updater.check_launcher_update()
         if update_info.get("error"):
-            self.statusBar().showMessage(f"Update-Check Fehler: {update_info.get('error')}", 7000)
+            self.statusBar().showMessage(f"Update check error: {update_info.get('error')}", 7000)
             return
 
         if update_info.get("update_available"):
             dlg = QDialog(self)
-            dlg.setWindowTitle("Update verfügbar")
+            dlg.setWindowTitle("Update Available")
             dlg.setModal(True)
             dlg.resize(760, 560)
 
             layout = QVBoxLayout(dlg)
             headline = QLabel(
-                f"Version {update_info['remote_version']} ist verfügbar.\n"
-                "Bitte lies zuerst das Changelog und entscheide danach, ob du updaten möchtest."
+                f"Version {update_info['remote_version']} is available.\n"
+                "Please read the changelog first and then decide whether you want to update."
             )
             headline.setWordWrap(True)
             layout.addWidget(headline)
@@ -2407,13 +2546,13 @@ class DoomManagerGUI(QMainWindow):
             if changelog_text:
                 changelog.setPlainText(changelog_text)
             else:
-                changelog.setPlainText("Kein Changelog geladen. Du kannst trotzdem updaten.")
+                changelog.setPlainText("No changelog was loaded. You can still continue with the update.")
             layout.addWidget(changelog)
 
             btn_row = QHBoxLayout()
-            btn_open = QPushButton("Changelog im Browser")
-            btn_no = QPushButton("Später")
-            btn_yes = QPushButton("Jetzt updaten")
+            btn_open = QPushButton("Open Changelog")
+            btn_no = QPushButton("Later")
+            btn_yes = QPushButton("Update Now")
 
             changelog_url = str(update_info.get("changelog_url") or "").strip()
             btn_open.setEnabled(bool(changelog_url))
@@ -2431,43 +2570,44 @@ class DoomManagerGUI(QMainWindow):
 
             if dlg.exec() == QDialog.Accepted:
                 mode = str(update_info.get("update_mode") or "script")
+                self.create_guard_backup(f"preupdate_v{cfg.APP_VERSION}")
                 if mode == "package":
                     ok = updater.apply_launcher_package_update(update_info)
                 else:
                     ok = updater.apply_launcher_update(update_info['remote_version'], update_info['remote_code'])
 
                 if ok:
-                    QMessageBox.information(self, "Update", "Update erfolgreich! Der Launcher wird nun beendet. Bitte starte ihn neu.")
+                    QMessageBox.information(self, "Update", "Update completed successfully. The launcher will now close. Please restart it.")
                     sys.exit(0)
-                QMessageBox.warning(self, "Update", "Update konnte nicht angewendet werden. Prüfe Logs und nutze bei Bedarf Rollback.")
+                QMessageBox.warning(self, "Update", "The update could not be applied. Check the logs and use rollback if needed.")
 
-    # --- MENÜS & DIALOGE ---
+    # --- Menus and dialogs ---
 
     def show_context_menu(self, pos):
-        """Erstellt das Rechtsklick-Menü"""
+        """Create the right-click menu."""
         item = self.table.itemAt(pos)
         if not item: return
 
-        # Die ID der Karte aus der Zelle holen
+        # Read the map ID from the cell.
         mid = item.data(Qt.UserRole)
         if not mid: return
 
         menu = QMenu(self.table)
 
-        # 1. Aktionen definieren
+        # 1. Define actions
         act_clear = menu.addAction("✔ Map Clear")
         act_mod   = menu.addAction("🅼 Skip Mods")
-        act_fav   = menu.addAction("⭐ Favorit") 
-        act_rename = menu.addAction("✏ Karte umbenennen")
+        act_fav   = menu.addAction("⭐ Favorite")
+        act_rename = menu.addAction("✏ Rename Map")
         
         menu.addSeparator()
-        act_args  = menu.addAction("🛠 Parameter bearbeiten")
-        act_del   = menu.addAction("🗑 Map löschen")
+        act_args  = menu.addAction("🛠 Edit Parameters")
+        act_del   = menu.addAction("🗑 Delete Map")
 
-        # 2. Menü anzeigen
+        # 2. Show the menu
         action = menu.exec(self.table.mapToGlobal(pos))
 
-        # 3. Auswertung der Klicks
+        # 3. Process the clicked action
         if action == act_clear:
             db.toggle_map_clear(mid)
             self.refresh_data()
@@ -2478,7 +2618,7 @@ class DoomManagerGUI(QMainWindow):
 
         elif action == act_fav:
             db.toggle_favorite(mid)
-            self.statusBar().showMessage(f"Favoriten-Status für {mid} geändert.")
+            self.statusBar().showMessage(f"Favorite status changed for {mid}.")
             self.refresh_data()
 
         elif action == act_rename:
@@ -2492,28 +2632,29 @@ class DoomManagerGUI(QMainWindow):
             self.delete_map(mid)
 
     def delete_map(self, map_id):
-        """Löscht einen Datenbankeintrag inkl. zugehöriger Dateien im PWAD-Pfad."""
-        reply = QMessageBox.question(self, "Löschen", f"Möchtest du Map {map_id} wirklich samt Dateien löschen?", 
+        """Delete a database entry including related files in the PWAD path."""
+        reply = QMessageBox.question(self, "Delete", f"Do you really want to delete map {map_id} including its files?",
                                      QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply == QMessageBox.Yes:
+            self.create_guard_backup(f"predelete_{map_id}")
             if db.uninstall_map(map_id):
-                QMessageBox.information(self, "Gelöscht", "Map erfolgreich entfernt.")
+                QMessageBox.information(self, "Deleted", "Map removed successfully.")
                 self.refresh_data()
             else:
-                QMessageBox.warning(self, "Fehler", "Map konnte nicht gelöscht werden (Basis-Spiel?).")
+                QMessageBox.warning(self, "Error", "The map could not be deleted (base game entry?).")
 
     def rename_map(self, map_id):
-        """Benennt den Karten-Namen in der Datenbank um."""
+        """Rename the map title in the database."""
         map_data = db.get_map_by_id(map_id)
         if not map_data:
-            QMessageBox.warning(self, "Fehler", "Karte wurde nicht gefunden.")
+            QMessageBox.warning(self, "Error", "The map was not found.")
             return
 
         current_name = str(map_data.get("Name", "")).strip() or str(map_id)
         new_name, ok = QInputDialog.getText(
             self,
-            "Karte umbenennen",
-            f"Neuer Name für {map_id}:",
+            "Rename Map",
+            f"New name for {map_id}:",
             text=current_name,
         )
 
@@ -2522,36 +2663,36 @@ class DoomManagerGUI(QMainWindow):
 
         final_name = str(new_name).strip()
         if not final_name:
-            QMessageBox.warning(self, "Ungültiger Name", "Der Name darf nicht leer sein.")
+            QMessageBox.warning(self, "Invalid Name", "The name cannot be empty.")
             return
 
         if final_name == current_name:
             return
 
         if db.update_map_name(map_id, final_name):
-            self.statusBar().showMessage(f"Karte {map_id} umbenannt in '{final_name}'.", 5000)
+            self.statusBar().showMessage(f"Map {map_id} renamed to '{final_name}'.", 5000)
             self.refresh_data()
         else:
-            QMessageBox.warning(self, "Fehler", "Name konnte nicht gespeichert werden.")
+            QMessageBox.warning(self, "Error", "The name could not be saved.")
 
     def open_api(self):
-        """Öffnet den Doomworld-Browser und refresh't nach erfolgreichem Download."""
+        """Open the Doomworld browser and refresh after a successful download."""
         dlg = ApiBrowserDialog(self)
         dlg.main_refresh_signal.connect(self.refresh_data)
         dlg.exec()
 
     def open_db_viewer(self):
-        """Öffnet den DB-Viewer für Filter/Export von maps.db."""
+        """Open the DB viewer for filtering and exporting maps.db."""
         dlg = DatabaseViewerDialog(self)
         dlg.exec()
 
     def update_tracker_button_text(self):
-        """Aktualisiert den ON/OFF Text des Tracker-Schalters."""
+        """Update the ON/OFF text of the tracker toggle."""
         tracker_on = cfg.config.getboolean("SETTINGS", "tracker_enabled", fallback=False)
         self.btn_tracker_toggle.setText("🐞 Debugger: ON" if tracker_on else "🐞 Debugger: OFF")
 
     def toggle_tracker(self):
-        """Schaltet den Funktions-Tracker in der config.ini ein/aus."""
+        """Toggle the function tracker in config.ini."""
         current = cfg.config.getboolean("SETTINGS", "tracker_enabled", fallback=False)
         new_value = "False" if current else "True"
         cfg.update_config_value("SETTINGS", "tracker_enabled", new_value)
@@ -2565,11 +2706,11 @@ class DoomManagerGUI(QMainWindow):
                     pass
 
         self.update_tracker_button_text()
-        state = "aktiv" if new_value == "True" else "deaktiviert"
-        self.statusBar().showMessage(f"Debugger wurde {state}.", 5000)
+        state = "enabled" if new_value == "True" else "disabled"
+        self.statusBar().showMessage(f"Debugger {state}.", 5000)
 
     def open_eng(self):
-        """Öffnet den Engine-Manager und aktualisiert danach die GUI."""
+        """Open Engine Manager and refresh the GUI afterwards."""
         dialog = EngineManagerDialog(self)
         dialog.exec() 
         
@@ -2578,26 +2719,26 @@ class DoomManagerGUI(QMainWindow):
         self.refresh_data()
 
     def edit_map_parameters(self, map_id):
-        """Öffnet ein Fenster, um die Custom-Parameter (ARGS) einer Map zu bearbeiten."""
-        
-        # 1. Aktuelle Daten direkt aus der Datenbank holen
+        """Open a dialog to edit custom map parameters (ARGS)."""
+
+        # 1. Load current data directly from the database.
         map_data = db.get_map_by_id(map_id)
         if not map_data:
-            QMessageBox.warning(self, "Fehler", "Konnte die Kartendaten nicht laden.")
+            QMessageBox.warning(self, "Error", "Could not load the map data.")
             return
 
-        map_name = map_data.get('Name', 'Unbekannt')
+        map_name = map_data.get('Name', 'Unknown')
         current_args = str(map_data.get('ARGS', '0')).strip()
         
-        # Wenn "0" in der Datenbank steht, machen wir das Eingabefeld für den Nutzer leer
+        # If the database stores "0", present an empty field to the user.
         if current_args == "0":
             current_args = ""
 
-        # 2. Eingabefenster (Prompt) anzeigen
+        # 2. Show the input prompt.
         new_args, ok = QInputDialog.getText(
             self, 
-            "Parameter bearbeiten", 
-            f"Zusätzliche Engine-Parameter für '{map_name}' eingeben:\n(Beispiel: -fast -nomonsters)\n\nLeer lassen, um Parameter zu entfernen.",
+            "Edit Parameters",
+            f"Enter additional engine parameters for '{map_name}':\n(Example: -fast -nomonsters)\n\nLeave empty to remove parameters.",
             text=current_args
         )
 
@@ -2605,21 +2746,33 @@ class DoomManagerGUI(QMainWindow):
             final_args = new_args.strip() if new_args.strip() else "0"
             
             if db.update_map_args(map_id, final_args):
-                print(f"✅ Parameter für {map_id} gespeichert: {final_args}")
+                print(f"✅ Parameters saved for {map_id}: {final_args}")
             else:
-                QMessageBox.warning(self, "Fehler", "Die Parameter konnten nicht gespeichert werden.")
+                QMessageBox.warning(self, "Error", "The parameters could not be saved.")
 
 # ============================================================================
-# START
+# Startup
 # ============================================================================
 if __name__ == "__main__":
-    # 1. Geräuschloses Setup ausführen (Ordner, config.ini und DB-Grundgeruest)
+    # 1. Run silent setup (folders, config.ini, and database scaffold).
     init.run_initial_setup()
 
-    # 2. GUI starten
+    # Windows taskbar identity: prevents grouping under the Python icon.
+    if sys.platform.startswith("win"):
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Apenotis.DMS.GUI")
+        except Exception:
+            pass
+
+    # 2. Start the GUI.
     app = QApplication(sys.argv)
+    icon_path = os.path.join(cfg.BASE_DIR, "assets", "dms_icon.ico")
+    if not os.path.exists(icon_path):
+        icon_path = os.path.join(cfg.BASE_DIR, "assets", "dms_icon.png")
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
     
-    # Dunkles Theme aktivieren (sieht für Doom passender aus)
+    # Enable the dark theme, which fits the Doom aesthetic better.
     app.setStyle("Fusion")
     palette = app.palette()
     palette.setColor(palette.ColorRole.Window, QColor(53, 53, 53))
@@ -2644,12 +2797,12 @@ if __name__ == "__main__":
             preview = str(fail_info.get("details", "") or "").strip()
             preview = preview[:700]
             txt = (
-                "Beim letzten Start wurde ein Fehler erkannt.\n"
-                "Möchtest du das neueste Update-Backup wiederherstellen?"
+                "A problem was detected during the last start.\n"
+                "Do you want to restore the latest update backup?"
             )
             msg = QMessageBox()
             msg.setIcon(QMessageBox.Warning)
-            msg.setWindowTitle("Startproblem erkannt")
+            msg.setWindowTitle("Startup Problem Detected")
             msg.setText(txt)
             if preview:
                 msg.setDetailedText(preview)
@@ -2657,13 +2810,15 @@ if __name__ == "__main__":
             msg.setDefaultButton(QMessageBox.Yes)
             if msg.exec() == QMessageBox.Yes:
                 if updater.restore_latest_update_backup():
-                    QMessageBox.information(None, "Rollback", "Backup erfolgreich wiederhergestellt. Bitte Launcher neu starten.")
+                    QMessageBox.information(None, "Rollback", "Backup restored successfully. Please restart the launcher.")
                     sys.exit(0)
-                QMessageBox.warning(None, "Rollback", "Backup konnte nicht wiederhergestellt werden.")
+                QMessageBox.warning(None, "Rollback", "The backup could not be restored.")
         updater.clear_start_failure_marker()
 
-    # 3. Fenster laden
+    # 3. Create and show the main window.
     window = DoomManagerGUI()
+    if os.path.exists(icon_path):
+        window.setWindowIcon(QIcon(icon_path))
     window.show()
     updater.clear_start_failure_marker()
     sys.exit(app.exec())

@@ -3,15 +3,15 @@ import os
 import sys
 
 # ============================================================================
-# PFADE & KONSTANTEN
+# Paths and constants
 # ============================================================================
-APP_VERSION = "3.2.2"
+APP_VERSION = "3.2.3"
 
 
 def _resolve_base_dir() -> str:
-    """Ermittelt den Arbeitsordner fuer Quelle und gebaute EXE konsistent."""
+    """Resolve the working directory consistently for source and frozen builds."""
     if getattr(sys, "frozen", False):
-        # Bei PyInstaller auf den Ordner der EXE zeigen, nicht auf _internal.
+        # For PyInstaller builds, point to the EXE directory, not _internal.
         return os.path.dirname(os.path.abspath(sys.executable))
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -25,7 +25,7 @@ DB_FILE = os.path.join(BASE_DIR, "maps.db")
 ENGINE_BASE_DIR = os.path.join(BASE_DIR, "Engines")
 
 # ============================================================================
-# ENGINE LISTEN & REPOS
+# Engine lists and repos
 # ============================================================================
 SUPPORTED_ENGINES = [
     "gzdoom", "uzdoom", "dsda-doom", "woof",
@@ -43,29 +43,29 @@ ENGINE_REPOS = {
     "lzdoom": "ZDoom/lzdoom"
 }
 
-# Optional: einzelne Engines auf direkte ZIP-URL mappen (z.B. falls GitHub API blockiert ist).
+# Optional: map individual engines to direct ZIP URLs if the GitHub API is blocked.
 DIRECT_DOWNLOADS = {}
 
-# Fallback fuer den Launcher-Updatecheck (wird bevorzugt aus config.ini gelesen).
+# Fallback for launcher update checks. config.ini values take precedence.
 UPDATE_URL = ""
 
 # ============================================================================
-# INITIALISIERUNG
+# Initialization
 # ============================================================================
 config = configparser.ConfigParser()
 
 
 def save_config():
-    """Schreibt den aktuellen Zustand sicher in die Datei (UTF-8-SIG gegen Bug)."""
+    """Write the current config state safely using UTF-8-SIG."""
     try:
         with open(CONFIG_FILE, "w", encoding="utf-8-sig") as f:
             config.write(f)
     except Exception as e:
-        print(f"Fehler beim Schreiben der config.ini: {e}")
+        print(f"Error writing config.ini: {e}")
 
 
 def load_config():
-    """Laedt die Konfiguration frisch von der Festplatte."""
+    """Reload configuration from disk."""
     if os.path.exists(CONFIG_FILE):
         config.read(CONFIG_FILE, encoding="utf-8-sig")
 
@@ -73,25 +73,24 @@ def load_config():
         if sec not in config:
             config.add_section(sec)
 
-    global CURRENT_ENGINE, USE_MODS
+    global CURRENT_ENGINE
     CURRENT_ENGINE = config.get("SETTINGS", "current_engine", fallback="gzdoom")
-    USE_MODS = config.getboolean("SETTINGS", "use_mods", fallback=True)
 
 
 def get_current_engine():
-    """Gibt den Namen der aktuell gewaehlten Engine zurueck."""
+    """Return the name of the currently selected engine."""
     config.read(CONFIG_FILE, encoding="utf-8-sig")
     return config.get("SETTINGS", "current_engine", fallback="gzdoom")
 
 
 def get_engine_path():
-    """Baut den kompletten Pfad zur EXE der aktuellen Engine."""
+    """Build the full path to the current engine executable."""
     name = get_current_engine()
     return os.path.join(ENGINE_BASE_DIR, name, f"{name}.exe")
 
 
 def update_config_value(section, key, value):
-    """Aktualisiert einen Wert und speichert sofort."""
+    """Update a config value and save it immediately."""
     section = section.upper()
     if not config.has_section(section):
         config.add_section(section)
@@ -101,7 +100,7 @@ def update_config_value(section, key, value):
 
 
 def set_stat(key, value):
-    """Spezialfunktion fuer Statistik-Werte (Spielzeit etc.)."""
+    """Convenience helper for statistics values such as playtime."""
     if "STATS" not in config:
         config.add_section("STATS")
     config.set("STATS", key, str(value))
@@ -109,7 +108,7 @@ def set_stat(key, value):
 
 
 def get_launcher_update_url() -> str:
-    """Ermittelt die Update-Quelle fuer den Launcher aus der config.ini."""
+    """Resolve the launcher update source from config.ini."""
     direct_url = config.get("UPDATE", "launcher_update_url", fallback="").strip()
     if direct_url:
         return direct_url
@@ -125,7 +124,7 @@ def get_launcher_update_url() -> str:
 
 
 def get_launcher_version_url() -> str:
-    """Ermittelt die Versions-Quelle fuer den Launcher-Check aus der config.ini."""
+    """Resolve the version source used for launcher update checks."""
     direct_url = config.get("UPDATE", "launcher_update_url", fallback="").strip()
     if direct_url:
         return direct_url

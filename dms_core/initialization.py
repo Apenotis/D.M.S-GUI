@@ -6,10 +6,10 @@ import dms_core.config as cfg
 
 
 def run_initial_setup() -> bool:
-    """Erzeugt das komplette Grundgeruest fuer Erststart/Tests."""
+    """Create the full base structure needed for first start and tests."""
     setup_activity = False
 
-    # 1. Ordnerstruktur sicherstellen
+    # 1. Ensure the directory structure exists.
     required_dirs = [
         cfg.IWAD_DIR,
         cfg.PWAD_DIR,
@@ -27,7 +27,7 @@ def run_initial_setup() -> bool:
             os.makedirs(path, exist_ok=True)
             setup_activity = True
 
-    # 2. config.ini erstellen/ergänzen
+    # 2. Create or extend config.ini.
     config = configparser.ConfigParser()
     if os.path.exists(cfg.CONFIG_FILE):
         config.read(cfg.CONFIG_FILE, encoding="utf-8-sig")
@@ -47,9 +47,10 @@ def run_initial_setup() -> bool:
     defaults = {
         "SETTINGS": {
             "current_engine": "",
-            "use_mods": "True",
             "setup_completed": config.get("SETTINGS", "setup_completed", fallback="0"),
             "tracker_enabled": config.get("SETTINGS", "tracker_enabled", fallback="False"),
+            "install_scan_on_startup": config.get("SETTINGS", "install_scan_on_startup", fallback="False"),
+            "backup_keep_count": config.get("SETTINGS", "backup_keep_count", fallback="10"),
         },
         "STATS": {
             "totaltime": config.get("STATS", "totaltime", fallback="0"),
@@ -73,7 +74,7 @@ def run_initial_setup() -> bool:
     with open(cfg.CONFIG_FILE, "w", encoding="utf-8-sig") as f:
         config.write(f)
 
-    # 3. SQLite-Datenbank sicher initialisieren
+    # 3. Initialize the SQLite database safely.
     try:
         import dms_core.database as db
 
@@ -82,9 +83,9 @@ def run_initial_setup() -> bool:
         db.create_table_if_not_exists()
         db.migrate_from_csv()
     except Exception as e:
-        print(f"[INIT] Datenbank-Initialisierung fehlgeschlagen: {e}")
+        print(f"[INIT] Database initialization failed: {e}")
 
-    # 4. Laufzeit-Config neu laden, damit globale Werte synchron sind
+    # 4. Reload runtime config so globals stay in sync.
     cfg.load_config()
 
     return setup_activity

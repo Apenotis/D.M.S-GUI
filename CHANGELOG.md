@@ -1,5 +1,21 @@
 # Changelog
 
+## [3.2.3] - 2026-04-15
+
+### Added
+- Smart Import Scan for local install packages with optional startup scan toggle.
+- Backup and restore actions in the GUI, including automatic guard backups before update and delete actions.
+- Backup retention pruning support and expanded backup payload coverage for recovery scenarios.
+
+### Fixed
+- Removed obsolete global `use_mods` config flow; mod handling now follows GUI selection by default with per-map `NoMods` override.
+- Build and distribution now consistently include custom app icons (`assets/dms_icon.ico` and `assets/dms_icon.png`).
+- `build_exe.bat` now prefers the local project virtual environment instead of a hardcoded path.
+
+### Changed
+- Release automation script hardened with stricter changelog validation and safer optional flags for push/release steps.
+- README updated with release script guidance, execution policy workaround, and a quick release checklist.
+
 ## [3.2.2] - 2026-04-13
 
 ### Added

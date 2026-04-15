@@ -5,7 +5,7 @@ a = Analysis(
     ['Gui.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('E:\\Doom Classic\\assets', 'assets')],
     hiddenimports=['dms_core.config', 'dms_core.database', 'dms_core.api', 'dms_core.engine_manager', 'dms_core.game_runner', 'dms_core.initialization', 'dms_core.installer', 'dms_core.map_loader', 'dms_core.setup_wizard', 'dms_core.updater', 'dms_core.utils'],
     hookspath=[],
     hooksconfig={},
@@ -32,6 +32,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['E:\\Doom Classic\\assets\\dms_icon.ico'],
 )
 coll = COLLECT(
     exe,

@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import subprocess
 import sys
 
@@ -12,6 +13,8 @@ def main() -> int:
     dist_subdir = f"dms-v{version}"
     dist_path = root / "dist" / dist_subdir
     build_path = root / "build" / dist_subdir
+    icon_path = root / "assets" / "dms_icon.ico"
+    assets_path = root / "assets"
 
     dms_hidden = [
         "dms_core.config",
@@ -40,6 +43,8 @@ def main() -> int:
         "--onedir",
         "--name",
         "DMS-GUI",
+        "--icon",
+        str(icon_path),
         "--distpath",
         str(dist_path),
         "--workpath",
@@ -47,6 +52,12 @@ def main() -> int:
         *hidden_args,
         "Gui.py",
     ]
+
+    if assets_path.exists():
+        cmd.extend([
+            "--add-data",
+            f"{assets_path}{os.pathsep}assets",
+        ])
 
     print("Building DMS GUI executable...")
     print(f"Version: {version}")

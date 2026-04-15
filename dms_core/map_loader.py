@@ -1,13 +1,13 @@
 import dms_core.database as db
 import dms_core.config as cfg
-from dms_core.utils import tracker  # Zuerst importieren!
+from dms_core.utils import tracker  # Import before using the decorator.
 
 
-@tracker  # Jetzt erst benutzen!
+@tracker  # Safe to use after the import above.
 def load_maps() -> dict[int, list]:
     """
-    Lädt Maps aus der Datenbank und sortiert sie. 
-    Favoriten kommen nach oben, Heretic (H) und Hexen (X) werden gruppiert.
+    Load maps from the database and sort them.
+    Favorites come first, while Heretic and Hexen entries stay grouped.
     """
     blocks: dict[int, list] = {1: [], 2: [], 3: []}
 
@@ -81,5 +81,5 @@ def load_maps() -> dict[int, list]:
 
         return blocks
     except Exception as e:
-        print(f"❌ Fehler im Loader: {e}")
+        print(f"Loader error: {e}")
         return blocks

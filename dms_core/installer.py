@@ -8,7 +8,7 @@ import dms_core.database as db
 from dms_core.utils import tracker
 
 # ============================================================================
-# DEINE ERKENNUNGS-MATRIX FÜR OFFIZIELLE DATEIEN (IWAD ORDNER)
+# Official file mapping (IWAD)
 # ============================================================================
 OFFICIAL_MAPPING = {
     "doom.wad":         {"Name": "Ultimate Doom", "IWAD": "doom.wad", "Kat": "IWAD", "Type": "DOOM"},
@@ -32,9 +32,11 @@ GAME_PROFILE_MAPPING = {
     "hexen": ("hexen.wad", "HEXEN", "EXTRA"),
 }
 
+INSTALL_EXTENSIONS = (".wad", ".zip", ".pk3", ".pk7")
+
 
 def _read_text_file_safe(txt_path):
-    """Liest TXT robust mit mehreren Encodings."""
+    """Read a TXT file robustly using multiple encodings."""
     encodings = ("utf-8", "utf-8-sig", "cp1252", "latin-1")
     for enc in encodings:
         try:
@@ -46,7 +48,7 @@ def _read_text_file_safe(txt_path):
 
 
 def _detect_game_from_txt(target_dir):
-    """Versucht das benötigte Hauptspiel aus TXT-Dateien zu erkennen."""
+    """Try to detect the required base game from TXT files."""
     try:
         txt_files = []
         for root, _, files in os.walk(target_dir):
@@ -64,23 +66,23 @@ def _detect_game_from_txt(target_dir):
             if not content:
                 continue
 
-            # Eindeutige Treffer priorisieren
+            # Prioritize explicit matches.
             if "heretic" in content:
                 scores["heretic"] += 3
             if "hexen" in content or "hexdd" in content:
                 scores["hexen"] += 3
 
-            # Doom 2 / Final Doom Hinweise
+            # Hints for Doom II / Final Doom.
             if "doom ii" in content or "doom 2" in content or "doom2" in content:
                 scores["doom2"] += 3
             if "plutonia" in content or "tnt" in content:
                 scores["doom2"] += 2
 
-            # Ultimate Doom Hinweise
+            # Hints for Ultimate Doom.
             if "ultimate doom" in content:
                 scores["doom"] += 3
 
-            # Generischer Doom Hinweis (niedriger gewichtet)
+            # Generic Doom hint with lower priority.
             if "doom" in content:
                 scores["doom"] += 1
 
@@ -91,7 +93,7 @@ def _detect_game_from_txt(target_dir):
 
 @tracker
 def install_custom(file_path, callback=None, resolve_game=None):
-    """Installiert Dateien und sortiert Offizielle in IWAD, den Rest in PWAD."""
+    """Install files and sort official content into IWAD, everything else into PWAD."""
     def log(msg):
         if callback: callback(msg)
         else: print(f"[INSTALLER] {msg}")
@@ -100,7 +102,7 @@ def install_custom(file_path, callback=None, resolve_game=None):
         fname = os.path.basename(file_path).lower()
         base_name = os.path.splitext(fname)[0]
         
-        # 1. PRÜFEN: Ist es eine offizielle Datei aus der Matrix?
+        # Check for official files.
         if fname in OFFICIAL_MAPPING:
             data = OFFICIAL_MAPPING[fname]
             title = data["Name"]
@@ -108,16 +110,16 @@ def install_custom(file_path, callback=None, resolve_game=None):
             kat = data["Kat"]
             prefix = data.get("Type", "DOOM")
             
-            # ZIEL: Direkt in den IWAD-Ordner (KEIN UNTERORDNER)
+            # Target: copy directly into the IWAD directory.
             target_dir = cfg.IWAD_DIR
             folder_name = "-" 
             dest_path = os.path.join(target_dir, fname)
             
-            log(f"› Verschiebe IWAD/Addon '{title}' in den IWAD-Ordner...")
+            log(f"> Moving IWAD/add-on '{title}' into the IWAD directory...")
             shutil.copy2(file_path, dest_path)
             
         else:
-            # 2. PWAD / CUSTOM MAP (UNBEKANNT)
+            # Handle PWAD/custom map content.
             title = base_name.replace("_", " ")
             folder_name = base_name
             target_dir = os.path.join(cfg.PWAD_DIR, folder_name)
@@ -125,7 +127,7 @@ def install_custom(file_path, callback=None, resolve_game=None):
             
             iwad, prefix, kat = "doom2.wad", "DOOM", "PWAD"
             
-            log(f"› Installiere PWAD '{title}' in PWAD-Ordner...")
+            log(f"> Installing PWAD '{title}' into the PWAD directory...")
             
             if file_path.lower().endswith(".zip"):
                 with zipfile.ZipFile(file_path, 'r') as z:
@@ -133,10 +135,10 @@ def install_custom(file_path, callback=None, resolve_game=None):
             else:
                 shutil.copy2(file_path, os.path.join(target_dir, fname))
 
-            # Erst TXT-Analyse nutzen (falls vorhanden)
+            # First try TXT-based analysis.
             detected_game = _detect_game_from_txt(target_dir)
 
-            # Danach Fallback auf Dateinamen-Hinweise
+            # Then fall back to filename heuristics.
             for f in os.listdir(target_dir):
                 fl = f.lower()
                 if "heretic" in fl:
@@ -146,17 +148,17 @@ def install_custom(file_path, callback=None, resolve_game=None):
                     detected_game = "hexen"
                     break
 
-            # Wenn weiterhin unbekannt: Benutzer fragen (GUI-Callback)
+            # If still unclear, use the user callback.
             if not detected_game and callable(resolve_game):
                 detected_game = resolve_game(file_path)
 
             if detected_game in GAME_PROFILE_MAPPING:
                 iwad, prefix, kat = GAME_PROFILE_MAPPING[detected_game]
             elif not detected_game:
-                log(f"⚠ Keine IWAD-Info gefunden für '{fname}'. Übersprungen.")
+                log(f"Warning: no IWAD info found for '{fname}'. Skipped.")
                 return False
 
-        # 3. DB-EINTRAG
+            # Create the database entry.
         new_id = db.get_next_id(prefix=prefix)
         map_data = {
             "Cleared": "0",
@@ -177,31 +179,40 @@ def install_custom(file_path, callback=None, resolve_game=None):
         if db.insert_map(map_data):
             return True
         else:
-            log(f"❌ Fehler beim Einfügen in Datenbank: {new_id}")
+            log(f"Error inserting into database: {new_id}")
             return False
     except Exception as e:
-        log(f"❌ Fehler bei {file_path}: {e}")
+        log(f"Error while processing {file_path}: {e}")
         return False
 
 def install_from_folder(callback=None, resolve_game=None):
-    """Scannt 'Install'-Ordner und räumt ihn danach auf."""
+    """Scan the Install folder and clean it up afterwards."""
     install_dir = os.path.join(cfg.BASE_DIR, "Install")
-    if not os.path.exists(install_dir):
-        os.makedirs(install_dir)
-        return 0
-
-    files = [f for f in os.listdir(install_dir) if f.lower().endswith((".wad", ".zip", ".pk3", ".pk7"))]
+    files = get_install_candidates(install_dir)
     count = 0
     
-    for f in files:
-        full_path = os.path.join(install_dir, f)
+    for full_path in files:
         if install_custom(full_path, callback, resolve_game=resolve_game):
             count += 1
             try:
-                os.remove(full_path) # Datei nach Erfolg löschen
+                os.remove(full_path)
             except:
                 pass
 
     if count > 0:
         db.repair_map_indices()
     return count
+
+
+def get_install_candidates(install_dir=None):
+    """Return full paths of importable files from Install/."""
+    target_dir = install_dir or os.path.join(cfg.BASE_DIR, "Install")
+    if not os.path.exists(target_dir):
+        os.makedirs(target_dir)
+        return []
+
+    candidates = []
+    for fname in os.listdir(target_dir):
+        if fname.lower().endswith(INSTALL_EXTENSIONS):
+            candidates.append(os.path.join(target_dir, fname))
+    return sorted(candidates)

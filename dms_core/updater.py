@@ -17,13 +17,13 @@ START_FAIL_FILE = os.path.join(cfg.BASE_DIR, "update_start_fail.json")
 PACKAGE_UPDATE_PATHS = ["Gui.py", "dms_core", "CHANGELOG.md", "start.bat", "recovery_launcher.py"]
 
 # ============================================================================
-# LAUNCHER & ENGINE UPDATES
+# Launcher and engine updates
 # ============================================================================
 
 def check_uzdoom_update() -> tuple[bool, str]:
     """
-    Prüft über die GitHub API, ob eine neuere Version der UZDoom Engine verfügbar ist.
-    Gibt ein Tuple zurück: (Ist_Neuer_als_4.14.3, Neueste_Version_String).
+    Check the GitHub API for a newer UZDoom release.
+    Returns a tuple of (is_newer_than_4_14_3, latest_version_string).
     """
     try:
         req = urllib.request.Request("https://api.github.com/repos/UZDoom/UZDoom/releases/latest")
@@ -33,13 +33,13 @@ def check_uzdoom_update() -> tuple[bool, str]:
             latest = data.get("tag_name", "")
             return latest != "4.14.3", latest
     except Exception as e:
-        print(f"[UPDATER] Fehler beim Prüfen auf UZDoom Update: {e}")
+        print(f"[UPDATER] Error while checking for a UZDoom update: {e}")
         return False, "4.14.3"
 
 def is_newer(remote: str, local: str) -> bool:
     """Vergleicht Versions-Strings wie '3.1' oder '3.0.5' mathematisch."""
     try:
-        # Zerlegt '3.1.0' in [3, 1, 0] für den korrekten Listen-Vergleich
+        # Split '3.1.0' into [3, 1, 0] for proper list comparison.
         remote_parts = [int(x) for x in str(remote).split(".")]
         local_parts = [int(x) for x in str(local).split(".")]
         return remote_parts > local_parts
@@ -99,7 +99,7 @@ def create_update_backup(label: str) -> str:
     backup_path = os.path.join(UPDATE_BACKUP_DIR, f"backup_{safe_label}_{stamp}.zip")
 
     with zipfile.ZipFile(backup_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for rel in PACKAGE_UPDATE_PATHS + ["config.ini", "maps.db"]:
+        for rel in PACKAGE_UPDATE_PATHS + ["config.ini", "maps.db", "maps.csv"]:
             abs_path = os.path.join(cfg.BASE_DIR, rel)
             if not os.path.exists(abs_path):
                 continue
@@ -113,6 +113,24 @@ def create_update_backup(label: str) -> str:
                 zf.write(abs_path, rel)
 
     return backup_path
+
+
+def prune_update_backups(keep_count: int = 10) -> int:
+    """Delete older ZIP backups and keep only the newest entries."""
+    try:
+        keep = max(1, int(keep_count))
+    except Exception:
+        keep = 10
+
+    files = get_update_backups()
+    removed = 0
+    for stale_path in files[keep:]:
+        try:
+            os.remove(stale_path)
+            removed += 1
+        except Exception:
+            continue
+    return removed
 
 
 def get_update_backups() -> list:
@@ -129,7 +147,7 @@ def restore_update_backup(backup_zip_path: str) -> bool:
             zf.extractall(cfg.BASE_DIR)
         return True
     except Exception as e:
-        print(f"[UPDATER] Fehler beim Wiederherstellen des ZIP-Backups: {e}")
+        print(f"[UPDATER] Error while restoring the ZIP backup: {e}")
         return False
 
 
@@ -177,11 +195,11 @@ def _get_launcher_target_path() -> str:
     target_path = os.path.abspath(os.path.join(cfg.BASE_DIR, target_rel))
     base_dir = os.path.abspath(cfg.BASE_DIR)
 
-    # Security guard: updates may only write python files inside BASE_DIR.
+    # Security guard: updates may only write Python files inside BASE_DIR.
     if not target_path.startswith(base_dir + os.sep):
-        raise ValueError(f"Unsicherer Update-Pfad ausserhalb BASE_DIR: {target_path}")
+        raise ValueError(f"Unsafe update path outside BASE_DIR: {target_path}")
     if not target_path.lower().endswith(".py"):
-        raise ValueError(f"Update-Zieldatei ist keine Python-Datei: {target_path}")
+        raise ValueError(f"Update target is not a Python file: {target_path}")
 
     return target_path
 
@@ -192,15 +210,15 @@ def _get_launcher_version_path() -> str:
     base_dir = os.path.abspath(cfg.BASE_DIR)
 
     if not version_path.startswith(base_dir + os.sep):
-        raise ValueError(f"Unsicherer Versions-Pfad ausserhalb BASE_DIR: {version_path}")
+        raise ValueError(f"Unsafe version path outside BASE_DIR: {version_path}")
     if not version_path.lower().endswith(".py"):
-        raise ValueError(f"Versions-Zieldatei ist keine Python-Datei: {version_path}")
+        raise ValueError(f"Version target is not a Python file: {version_path}")
 
     return version_path
 
 
 def _sync_local_version(remote_version: str) -> None:
-    """Aktualisiert APP_VERSION in der lokalen Versionsdatei nach erfolgreichem Update."""
+    """Update APP_VERSION in the local version file after a successful update."""
     version_path = _get_launcher_version_path()
     if not os.path.exists(version_path):
         return
@@ -221,8 +239,8 @@ def _sync_local_version(remote_version: str) -> None:
 
 def check_launcher_update() -> dict:
     """
-    Prüft auf der angegebenen UPDATE_URL, ob eine neuere Version des Launchers vorliegt.
-    Gibt ein Dictionary zurück, das von der GUI verarbeitet werden kann.
+    Check whether a newer launcher version is available.
+    Returns a dictionary the GUI can process directly.
     """
     result = {
         "update_available": False,
@@ -265,10 +283,10 @@ def check_launcher_update() -> dict:
         update_url = cfg.get_launcher_update_url()
         version_url = cfg.get_launcher_version_url()
         if not update_url:
-            result["error"] = "Launcher-Updatequelle nicht konfiguriert (UPDATE.launcher_update_url oder launcher_repo)."
+            result["error"] = "Launcher update source is not configured (UPDATE.launcher_update_url or launcher_repo)."
             return result
         if not version_url:
-            result["error"] = "Launcher-Versionsquelle nicht konfiguriert."
+            result["error"] = "Launcher version source is not configured."
             return result
 
         version_code = _fetch_text(version_url, timeout=5)
@@ -295,55 +313,53 @@ def check_launcher_update() -> dict:
                 
     except Exception as e:
         result["error"] = str(e)
-        print(f"[UPDATER] Fehler beim Update-Check: {e}")
+        print(f"[UPDATER] Error while checking for updates: {e}")
 
     return result
 
 def apply_launcher_update(remote_version: str, remote_code: str) -> bool:
     """
-    Führt das Auto-Update durch, erstellt Backups (Script & CSV) und
-    schreibt den neuen Code. Muss von der Hauptdatei oder GUI gerufen werden, 
-    die danach einen Neustart initiiert.
+    Apply a script-based launcher update, create backups, and write the new code.
+    This must be called by the main app or GUI, which then initiates a restart.
     """
     try:
         target_path = _get_launcher_target_path()
 
-        # Plausibility check for GUI updates: prevent writing unrelated files into Gui.py.
+        # Plausibility check for GUI updates: prevent unrelated files from replacing Gui.py.
         if os.path.basename(target_path).lower() == "gui.py":
             if "class DoomManagerGUI" not in remote_code:
-                raise ValueError("Remote-Code sieht nicht wie Gui.py aus (DoomManagerGUI fehlt).")
+                raise ValueError("Remote code does not look like Gui.py (DoomManagerGUI is missing).")
 
-        # 1. Script Backup
+        # 1. Script backup
         backup_path = f"{target_path}.bak_v{cfg.APP_VERSION}"
         shutil.copy2(target_path, backup_path)
 
-        # 2. Datenbank Backup
+        # 2. Database backup
         if os.path.exists(cfg.DB_FILE):
             db_backup_path = f"{cfg.DB_FILE}.bak_v{cfg.APP_VERSION}"
             shutil.copy2(cfg.DB_FILE, db_backup_path)
 
-        # Update schreiben
+        # Write the update
         remote_code_fixed = remote_code.replace("\r\n", "\n")
         with open(target_path, "w", encoding="utf-8-sig") as f:
             f.write(remote_code_fixed)
 
-        # Wichtig: lokale Versionsdatei mitschreiben, damit beim Neustart
-        # kein endloser Update-Dialog mehr erscheint.
+        # Also update the local version file so the next start does not show the dialog again.
         _sync_local_version(remote_version)
 
         return True
     except Exception as e:
-        print(f"[UPDATER] Fehler beim Anwenden des Updates: {e}")
+        print(f"[UPDATER] Error while applying the update: {e}")
         return False
 
 
 def apply_launcher_package_update(update_info: dict) -> bool:
-    """Wendet ein ZIP-Paketupdate an (vollstaendige getestete Release-Basis)."""
+    """Apply a ZIP package update based on a complete tested release."""
     try:
         remote_version = str(update_info.get("remote_version", "") or "").strip()
         package_url = str(update_info.get("package_url", "") or "").strip()
         if not remote_version or not package_url:
-            raise ValueError("Paket-Updateinformationen fehlen (Version oder URL).")
+            raise ValueError("Package update information is incomplete (missing version or URL).")
 
         create_update_backup(f"preupdate_v{cfg.APP_VERSION}")
 
@@ -357,7 +373,7 @@ def apply_launcher_package_update(update_info: dict) -> bool:
 
             project_root = _find_project_root(extract_dir)
             if not project_root:
-                raise ValueError("Projektwurzel im ZIP nicht gefunden (Gui.py/dms_core fehlen).")
+                raise ValueError("Project root not found inside ZIP (Gui.py/dms_core missing).")
 
             for rel in PACKAGE_UPDATE_PATHS:
                 src = os.path.join(project_root, rel)
@@ -369,12 +385,12 @@ def apply_launcher_package_update(update_info: dict) -> bool:
         _sync_local_version(remote_version)
         return True
     except Exception as e:
-        print(f"[UPDATER] Fehler beim Paket-Update: {e}")
+        print(f"[UPDATER] Error while applying the package update: {e}")
         return False
 
 def get_available_backups() -> list:
     """
-    Sucht nach vorhandenen Backups (.bak_v*) und gibt eine Liste zurück.
+    Search for available backups (.bak_v*) and return them as a list.
     """
     target_path = _get_launcher_target_path()
     backup_files = sorted(glob.glob(f"{target_path}.bak_v*"), reverse=True)
@@ -382,26 +398,26 @@ def get_available_backups() -> list:
 
 def apply_rollback(backup_file_path: str) -> bool:
     """
-    Stellt eine ältere Version des Scripts sowie der dazugehörigen Datenbank wieder her.
+    Restore an older script version together with its matching database backup.
     """
     try:
         target_path = _get_launcher_target_path()
         version_suffix = backup_file_path.split(".bak_")[-1]
         selected_db_bak = f"{cfg.DB_FILE}.bak_{version_suffix}"
 
-        # Aktuellen Zustand als "Broken" sichern
+        # Save the current state as a "broken" snapshot.
         shutil.copy2(target_path, f"{target_path}.broken")
         if os.path.exists(cfg.DB_FILE):
             shutil.copy2(cfg.DB_FILE, f"{cfg.DB_FILE}.broken")
 
-        # Wiederherstellung Script
+        # Restore script
         shutil.copy2(backup_file_path, target_path)
 
-        # Wiederherstellung Datenbank (falls Backup existiert)
+        # Restore database if a backup exists
         if os.path.exists(selected_db_bak):
             shutil.copy2(selected_db_bak, cfg.DB_FILE)
 
         return True
     except Exception as e:
-        print(f"[UPDATER] Fehler beim Rollback: {e}")
+        print(f"[UPDATER] Rollback error: {e}")
         return False

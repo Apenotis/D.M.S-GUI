@@ -1,12 +1,12 @@
 @echo off
 setlocal
 
-REM Build D.M.S GUI as a one-folder Windows app (recommended for external data files)
-set "PYTHON_EXE=e:\Doom Classic\Test\.venv\Scripts\python.exe"
+REM Build D.M.S GUI as a one-folder Windows app.
+REM Prefer the workspace venv and fall back to the launcher on PATH.
+set "PYTHON_EXE=%~dp0.venv\Scripts\python.exe"
 
 if not exist "%PYTHON_EXE%" (
-  echo Python executable not found: %PYTHON_EXE%
-  exit /b 1
+  set "PYTHON_EXE=python"
 )
 
 cd /d "%~dp0"

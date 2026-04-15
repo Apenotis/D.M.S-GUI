@@ -18,7 +18,7 @@ tracker_log.propagate = False
 legacy_tracker_log = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dms_tracker.log")
 
 def _ensure_tracker_handlers():
-    """Initialisiert Tracker-Handler nur einmal (nur Konsole, keine Datei)."""
+    """Initialize tracker handlers only once using console output only."""
     if tracker_log.handlers:
         return
 
@@ -29,7 +29,7 @@ def _ensure_tracker_handlers():
 
 
 def is_tracker_enabled() -> bool:
-    """Liest den Tracker-Schalter aus der config.ini."""
+    """Read the tracker switch from config.ini."""
     try:
         cfg.load_config()
         enabled = cfg.config.getboolean("SETTINGS", "tracker_enabled", fallback=False)
@@ -44,7 +44,7 @@ def is_tracker_enabled() -> bool:
 
 def tracker(func):
     """
-    Ein Decorator, der den Start, das Ende und jeden Crash einer Funktion loggt.
+    Decorator that logs the start, end, and crash of a function.
     """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
@@ -56,46 +56,46 @@ def tracker(func):
         tracker_log.debug(f"▶ START: {func.__name__}")
         try:
             result = func(*args, **kwargs)
-            tracker_log.debug(f"✅ ENDE:  {func.__name__} erfolgreich.")
+            tracker_log.debug(f"✅ END:  {func.__name__} completed successfully.")
             return result
         except Exception as e:
             error_msg = f"❌ CRASH in {func.__name__}: {str(e)}\n{traceback.format_exc()}"
             tracker_log.error(error_msg)
-            print(error_msg) # Absicherung, falls der Logger hängt
+            print(error_msg)  # Fallback in case the logger itself fails.
             raise 
     return wrapper
 
 # ============================================================================
-# HILFSFUNKTIONEN (Utilities)
+# Helper functions
 # ============================================================================
 
 def clear_screen():
-    """Löscht den Bildschirm der Konsole."""
+    """Clear the console screen."""
     os.system("cls" if os.name == "nt" else "clear")
 
 def resize_terminal(cols, lines):
-    """Passt die Terminalgröße an (Ignoriert von GUI oder modernen Terminals)."""
+    """Resize the terminal window when supported."""
     try:
         if os.name == "nt":
-            # Für die klassische Windows cmd.exe
+            # For the classic Windows cmd.exe
             os.system(f"mode con: cols={cols} lines={lines}")
 
-        # ANSI-Escape-Sequenz für Linux/Mac und kompatible Terminals
+        # ANSI escape sequence for Linux/macOS and compatible terminals
         sys.stdout.write(f"\x1b[8;{lines};{cols}t")
         sys.stdout.flush()
     except Exception:
-        # Falls das Terminal die Änderung blockiert (z.B. in der GUI), einfach ignorieren
+        # Ignore terminals that do not support resizing, such as embedded GUI consoles.
         pass
 
 def real_len(text):
-    """Berechnet die tatsächliche Länge eines Strings ohne ANSI-Farbcodes."""
+    """Return the visible length of a string without ANSI color codes."""
     if not text:
         return 0
     ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
     return len(ansi_escape.sub("", str(text)))
 
 def format_time(total_seconds):
-    """Formatiert Sekunden in einen lesbaren String (HH:MM:SS)."""
+    """Format seconds as a readable HH:MM:SS string."""
     try:
         total_seconds = int(total_seconds)
     except (ValueError, TypeError):
